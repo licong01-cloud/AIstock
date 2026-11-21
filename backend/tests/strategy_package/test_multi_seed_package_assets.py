@@ -138,9 +138,96 @@ def test_live_inference_runs_both_fitted_seeds_not_a_representative_copy():
     assert [frame["score"].iloc[0] for frame in result.seed_frames.values()] == [3.0, 9.0]
     assert result.live_result.scores == [{"symbol": "000001.SZ", "score": 6.0}]
     assert len(result.live_result.source_read_receipts) == 8
+    assert result.seed_input_evidence is None
+    assert 'seed_input_receipts' not in result.live_result.input_context
     assert set(result.live_result.input_context["seed_input_context"]["per_leg_window_lineage"]) == {A1_SEED, second}
     assert len({call["model_asset"].sha256 for call in resolver.load_calls}) == 2
     assert len({call["cache_namespace"] for call in resolver.prepare_calls}) == 2
+
+
+def _planned_seed_result(damage=None, *, public_artifact=False):
+    from backend.services.advisory_historical_range import input_source_plan as sources
+
+    _, record, second = _promoted()
+    manifest = record.current_manifest()
+    leg = _parent_leg_runtime_slices(manifest, evidence=_multi_alpha_evidence(manifest),
+                                     package_id=record.package_id)[0]
+    originals = {}
+
+    class PlannedProvider(FakeProvider):
+        def run(self, **kwargs):
+            seed = kwargs['workspace'].seed_run_id
+            if public_artifact:
+                from backend.tests.strategy_package.test_multi_alpha_live_selection import _score_rows
+                self.scores_by_leg[kwargs['workspace'].leg_id] = _score_rows()
+            else:
+                self.scores_by_leg[A1_LEG] = [{'symbol': '000001.SZ', 'score': 3.0 if seed == A1_SEED else 9.0}]
+            result = super().run(**kwargs)
+            route = dict(source='DATABASE', data_cutoff=str(TRADE_DATE),
+                         history_start=result.input_context['window_start_date'], plan_hash='a' * 64)
+            payload = dict(input_context=result.input_context, source_read_receipts=result.source_read_receipts)
+            result.input_context['source_plan_receipt'] = sources.input_receipt(route, payload)
+            if seed == second:
+                if damage == 'missing':
+                    del result.input_context['source_plan_receipt']
+                elif damage == 'seal':
+                    result.input_context['source_plan_receipt']['source_receipt_hash'] = '0' * 64
+                elif damage == 'partition':
+                    result.source_read_receipts[1]['partition_ref'] = 'different-partition'
+                    result.input_context['source_plan_receipt'] = sources.input_receipt(route, payload)
+                elif damage == 'version':
+                    result.source_read_receipts[1]['query_template_version'] = 'different-version'
+                    result.input_context['source_plan_receipt'] = sources.input_receipt(route, payload)
+            originals[seed] = deepcopy(payload)
+            return result
+
+    live = MultiAlphaLivePredictionProvider(package_repository=SimpleNamespace(get=lambda _: record), artifact_repository=None,
+        runtime_asset_resolver=FakeResolver(), live_inference_provider=PlannedProvider({}))
+    if public_artifact:
+        from backend.tests.strategy_package.test_multi_alpha_live_selection import _runtime_config
+        artifact, = live.prepare_artifacts(package_id=record.package_id, trade_dates=[TRADE_DATE],
+            data_source='DB_HISTORICAL', runtime_config=_runtime_config(), include_reference_price=False,
+            cutoff_date=TRADE_DATE, inference_backend='local', historical_read_only=True)
+        return artifact, originals
+    result = live._run_parent_leg_live_inference(manifest=manifest, leg_slice=leg, trade_date=TRADE_DATE,
+        cutoff_date=None, runtime_config={}, inference_backend='local', historical_read_only=True)
+    return result, originals
+
+
+def test_planned_multi_seed_component_keeps_four_roles_and_every_original_seed_proof():
+    from backend.services.advisory_historical_range import input_source_plan as sources
+
+    result, originals = _planned_seed_result()
+    native = result.live_result
+    assert native.scores == [{'symbol': '000001.SZ', 'score': 6.0}]
+    assert len(native.source_read_receipts) == 4
+    receipt = native.input_context['source_plan_receipt']
+    assert sources.input_receipt(receipt['route'], dict(input_context=native.input_context,
+        source_read_receipts=native.source_read_receipts)) == receipt
+    assert set(native.input_context['seed_input_receipts']) == set(originals)
+    assert set(result.seed_input_evidence) == set(originals)
+    for seed, original in originals.items():
+        evidence = result.seed_input_evidence[seed]
+        assert evidence['input_context'] == original['input_context']
+        assert evidence['source_read_receipts'] == original['source_read_receipts']
+        assert native.input_context['seed_input_receipts'][seed] == original['input_context']['source_plan_receipt']
+
+
+@pytest.mark.parametrize('damage', ['missing', 'seal', 'partition', 'version'])
+def test_planned_multi_seed_component_refuses_incomplete_or_changed_input_proofs(damage):
+    with pytest.raises(ValueError, match='SOURCE_TASK_SEED'):
+        _planned_seed_result(damage)
+
+
+def test_public_parent_artifact_retains_seed_evidence_for_task_validation():
+    artifact, originals = _planned_seed_result(public_artifact=True)
+    component = artifact.metadata['component_artifacts'][A1_LEG]
+    assert len(component['source_read_receipts']) == 4
+    assert set(component['seed_input_evidence']) == set(component['seed_run_ids'])
+    for seed, evidence in component['seed_input_evidence'].items():
+        assert evidence['input_context'] == originals[seed]['input_context']
+        assert evidence['source_read_receipts'] == originals[seed]['source_read_receipts']
+    assert artifact.score_count > 0
 
 
 @pytest.mark.parametrize("damage", ["missing", "duplicate", "wrong_sha", "wrong_factor", "wrong_runtime", "extra"])

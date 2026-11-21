@@ -257,6 +257,56 @@ def test_source_errors_keep_owner_reason_and_kernel_cause_in_executor():
     assert _classify_failure(wrapped)[1] == ("SOURCE_INPUT_DRIFT",)
 
 
+@pytest.mark.parametrize('seed_count', [3, 5])
+def test_task_validator_accepts_bound_multi_seed_reads_without_relaxing_four_role_guard(
+        tmp_path, monkeypatch, authority, seed_count):
+    from types import SimpleNamespace
+    from backend.services.advisory_historical_range import input_source_plan as sources
+    from backend.services.advisory_historical_range.task_input_sources import validate_task_raw_inputs
+    from backend.services.strategy_package.multi_alpha_live import (
+        _aggregate_parent_leg_input_context, _aggregate_seed_source_plan_evidence,
+    )
+    from backend.tests.advisory_historical_range.test_r2b_candidate_producer import TRADE_DATE
+
+    producer, payload, program, _, _ = _planned_producer(tmp_path, monkeypatch)
+    prepared = producer._signal_preparation.result
+    metadata = prepared.raw.artifact.metadata
+    native_context = deepcopy(metadata['provider_metadata']['selection_native_input_context'])
+    # Complete the single-model fixture's native envelope for the real parent validator.
+    native_context.update(requested_trade_date=str(TRADE_DATE), score_trade_date=str(TRADE_DATE),
+                          pit_mode='stock_universe_pit_v1', window_lineage_hash=native_context['calendar_hash'])
+    native_context['source_plan_receipt'] = sources.input_receipt(native_context['source_plan_receipt']['route'],
+        dict(input_context=native_context, source_read_receipts=list(prepared.raw.source_read_receipts)))
+    executions = {seed: SimpleNamespace(live_result=SimpleNamespace(
+        input_context=deepcopy(native_context),
+        source_read_receipts=deepcopy(list(prepared.raw.source_read_receipts)),
+        universe_count=prepared.raw.artifact.universe_count, scores=prepared.raw.artifact.scores_json,
+    )) for seed in (f'seed-{i}' for i in range(1, seed_count + 1))}
+    lineage = _aggregate_parent_leg_input_context(leg_executions=executions, requested_trade_date=TRADE_DATE)
+    context, reads, evidence = _aggregate_seed_source_plan_evidence(executions=executions,
+        input_context={**native_context, 'seed_input_context': lineage},
+        model_asset_hashes={seed: str(i) * 64 for i, seed in enumerate(executions, 1)})
+    component = program.admitted_package_projection.components[0].component_id
+    metadata['component_artifacts'] = {component: dict(input_context=context,
+        source_read_receipts=reads, seed_input_evidence=evidence)}
+    args = dict(plan=program.selection_input_source_plan, prepared=prepared, program=program,
+        date_plan=payload.resolved_request.date_plan, decision_trade_date=TRADE_DATE)
+    result = validate_task_raw_inputs(**args)
+    assert result['component_receipts'][component] == context['source_plan_receipt']
+    assert len(reads) == 4 and len(evidence) == seed_count
+    before = deepcopy(metadata)
+    validate_task_raw_inputs(**args)
+    assert metadata == before
+    # The public four-role validator still refuses repeated/omitted roles.
+    metadata['component_artifacts'][component]['source_read_receipts'] = reads + deepcopy(reads)
+    with pytest.raises(sources.SourcePlanError, match='SOURCE_ACTUAL_INPUT_RECEIPT_MISSING'):
+        validate_task_raw_inputs(**args)
+    metadata['component_artifacts'][component]['source_read_receipts'] = reads
+    context['seed_input_receipts']['seed-2']['actual_inputs'][0]['content_hash'] = '0' * 64
+    with pytest.raises(sources.SourcePlanError, match='SOURCE_TASK_ACTUAL_RECEIPT_MISMATCH'):
+        validate_task_raw_inputs(**args)
+
+
 @pytest.mark.parametrize("source,resolution,valid", [
     ("DATASET_FILES", "frozen_file_calendar", True),
     ("DATASET_FILES", "trading_calendar", False),

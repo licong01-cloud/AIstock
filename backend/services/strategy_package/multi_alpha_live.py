@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from copy import deepcopy
 from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Callable, Mapping, Sequence
@@ -123,6 +124,7 @@ class ParentLegLiveInferenceResult:
     live_result: Any
     source: Any
     prepared: Any
+    seed_input_evidence: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -550,6 +552,8 @@ class MultiAlphaLivePredictionProvider:
                     "source_read_receipts": list(leg_execution.live_result.source_read_receipts or []),
                     "input_context": dict(leg_execution.live_result.input_context or {}),
                 }
+                if getattr(leg_execution, "seed_input_evidence", None) is not None:
+                    component_metadata[leg_slice.leg_id]["seed_input_evidence"] = leg_execution.seed_input_evidence
 
             aligned = _align_component_frames(leg_frames, allow_empty=True, strict=manifest.alpha_combination_policy.method == "frozen_weighted")
             component_candidate_universe_size = int(len(aligned))
@@ -909,15 +913,21 @@ class MultiAlphaLivePredictionProvider:
             package_id=leg_slice.parent_package_id, trade_date=cutoff_date or trade_date, allow_empty=True,
             strict=manifest.alpha_combination_policy.method == "frozen_weighted",
         )
+        input_context, source_receipts, seed_evidence = _aggregate_seed_source_plan_evidence(
+            executions=executions,
+            input_context={**first.live_result.input_context, "seed_input_context": context},
+            model_asset_hashes={seed.seed_run_ids[0]: seed.model_asset.sha256 for seed in slices},
+        )
         return ParentLegLiveInferenceResult(
             seed_frames=frames,
             live_result=_CombinedLiveInferenceResult(
                 scores=[{"symbol": row.instrument, "score": float(row.score)} for row in combined.itertuples()],
                 universe_count=int(context["parent_input_universe_count"]),
-                source_read_receipts=[receipt for execution in executions.values() for receipt in execution.live_result.source_read_receipts or []],
-                input_context={**first.live_result.input_context, "seed_input_context": context},
+                source_read_receipts=source_receipts,
+                input_context=input_context,
             ),
             source=first.source, prepared=first.prepared,
+            seed_input_evidence=seed_evidence,
         )
 
     def _run_single_seed_live_inference(
@@ -1965,6 +1975,52 @@ def _artifact_config(runtime_config: Mapping[str, Any] | None) -> dict[str, Any]
             context={"selection_artifact_config_type": type(artifact).__name__},
         )
     return dict(artifact)
+
+
+def _aggregate_seed_source_plan_evidence(*, executions, input_context, model_asset_hashes):
+    """Bind a component's shared reads only after verifying every original seed.
+
+    The task contract has four roles per component. Repeated reads of the same
+    four inputs are not extra roles; retain each seed's original proof separately.
+    Legacy inference without an explicit source plan keeps its original envelope.
+    """
+    results = {seed: execution.live_result for seed, execution in executions.items()}
+    if not results:
+        raise DataUnavailableError("MULTI_ALPHA component has no seed input evidence",
+            context={"reason_code": "ADVISORY_PHASE0A2C_SOURCE_RECEIPT_INCOMPLETE"})
+    receipts = [dict(receipt) for result in results.values() for receipt in result.source_read_receipts or []]
+    if all(result.input_context.get("source_plan_receipt") is None for result in results.values()):
+        return input_context, receipts, None
+
+    from backend.services.advisory_historical_range import input_source_plan as sources
+
+    if not results or set(results) != set(model_asset_hashes):
+        raise sources.SourcePlanError("SOURCE_TASK_SEED_ROSTER_MISMATCH")
+    route = next((receipt.get("route") for result in results.values()
+                  if isinstance(receipt := result.input_context.get("source_plan_receipt"), dict)), None)
+    if not isinstance(route, dict):
+        raise sources.SourcePlanError("SOURCE_TASK_SEED_RECEIPT_MISSING")
+    originals, native_receipts, actual_inputs, component_reads = {}, {}, None, None
+    for seed, result in results.items():
+        original = deepcopy(dict(input_context=result.input_context, source_read_receipts=result.source_read_receipts))
+        saved = original["input_context"].get("source_plan_receipt")
+        if not isinstance(saved, dict):
+            raise sources.SourcePlanError("SOURCE_TASK_SEED_RECEIPT_MISSING", seed=seed)
+        verified = sources.input_receipt(route, original)
+        if saved != verified:
+            raise sources.SourcePlanError("SOURCE_TASK_SEED_RECEIPT_MISMATCH", seed=seed)
+        if actual_inputs is None:
+            actual_inputs, component_reads = verified["actual_inputs"], original["source_read_receipts"]
+        elif verified["actual_inputs"] != actual_inputs:
+            raise sources.SourcePlanError("SOURCE_TASK_SEED_INPUTS_MISMATCH", seed=seed)
+        originals[seed] = {**original, "model_asset_sha256": model_asset_hashes[seed]}
+        native_receipts[seed] = verified
+    context = deepcopy(input_context)
+    context["seed_input_receipts"] = native_receipts
+    context["seed_model_asset_hashes"] = dict(model_asset_hashes)
+    context["source_plan_receipt"] = sources.input_receipt(route,
+        dict(input_context=context, source_read_receipts=component_reads))
+    return context, component_reads, originals
 
 
 def _aggregate_parent_leg_input_context(
