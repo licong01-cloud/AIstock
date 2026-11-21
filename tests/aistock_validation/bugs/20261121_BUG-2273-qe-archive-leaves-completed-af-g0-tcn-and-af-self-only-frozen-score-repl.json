@@ -111,11 +111,18 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qe-archive/health",
+    "fresh_process_evidence": [
+      "Fresh interpreter loaded the tracked classifier from the BUG-2273 worktree. The original six production sources were read without writes, tied to their sealed 565-day ledgers and 2,765,884-key consumer receipts, and processed through the existing selected-ID backfill in DEV. Six previews and six valid DEV Archive readbacks passed. The DEV transaction was rolled back and read back in a fresh connection. Code SHA256 1f0075f0d97c730fabb2889cc80947090b77d2f701331e00b270a80e35f8bdd6 and receipt SHA256 d97e3ddb36569525db20c79a68f2c3d8e22ea0f54307d2cd7a4a572207d4306f. Receipt tmp/handoff/qe-graph-mainline-next-15h-20261121/bug2273_dev_recovery.json.",
+      "The fixed QE lifecycle suite passed 51 tests, including the two nested producer formats, malformed input, identity changes, and prior G0/TCN forms. The direct positive test reproduced the failure before repair."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "post_restart_note": "After the user reloads backend-main, verify the merged runtime identity and read source-status for cf6bea0c, 45df08ba, 2b66a14e, 03b86d07, e7cd8aaf and e648e801. If no Archive rows yet, require all six sources eligible and use the exact original IDs and sealed accounts for explicitly authorized selected-ID backfill. Verify unique valid Archive IDs and preserve skip history. No new compute is needed.",
+    "provisional": false,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
