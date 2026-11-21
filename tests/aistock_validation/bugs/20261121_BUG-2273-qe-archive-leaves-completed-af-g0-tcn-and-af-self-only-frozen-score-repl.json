@@ -28,12 +28,18 @@
   ],
   "expected": "Recognize both evidenced nested replay contracts with strict per-leg identity, hashes, distinct graph producers and exact frozen weights. Verify with the original six account sources, reuse them under the original IDs, and preserve legacy classifier behavior.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/qe_archive/asset_lifecycle.py",
+      "backend/tests/qe_archive/test_qe_asset_lifecycle.py",
+      "tests/aistock_validation/bugs/20261121_BUG-2273-qe-archive-leaves-completed-af-g0-tcn-and-af-self-only-frozen-score-repl.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/qe_archive/asset_lifecycle.py",
-      "backend/tests/qe_archive/test_qe_asset_lifecycle.py"
+      "backend/tests/qe_archive/test_qe_asset_lifecycle.py",
+      "tests/aistock_validation/bugs/20261121_BUG-2273-qe-archive-leaves-completed-af-g0-tcn-and-af-self-only-frozen-score-repl.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/qe_archive/asset_lifecycle.py",
@@ -90,8 +96,8 @@
   },
   "first_seen_at": "2026-11-21T15:17:29.874167Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "fd8c4d6d5d855c847088ae12a78ef29de1bfae76",
+  "fixed_at": "2026-11-21T15:28:11Z",
   "github_issue_number": 7423,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7423",
   "last_seen_at": "2026-11-21T15:17:29.874167Z",
@@ -99,6 +105,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7424",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -122,7 +129,9 @@
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
     "post_restart_note": "After the user reloads backend-main, verify the merged runtime identity and read source-status for cf6bea0c, 45df08ba, 2b66a14e, 03b86d07, e7cd8aaf and e648e801. If no Archive rows yet, require all six sources eligible and use the exact original IDs and sealed accounts for explicitly authorized selected-ID backfill. Verify unique valid Archive IDs and preserve skip history. No new compute is needed.",
+    "post_restart_receipt_ref": null,
     "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -132,7 +141,30 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2273",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "dc6145ade01c5d39",
+    "recorded_at": "2026-11-21T15:29:14.733369Z",
+    "runtime_contract_digest": "7e566e34089b329cf71fc329d390e789019c7e3cf6ad0e6b1b910a736e01a7c6",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "b62030b5b0b22cbb02ff82c9053f8ae728dac393",
+    "source_merge_commit": "fd8c4d6d5d855c847088ae12a78ef29de1bfae76",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7424",
+    "validation_evidence": [
+      "validation-receipt: id=7c019f72667dcd5a commit=b62030b5b0b22cbb02ff82c9053f8ae728dac393 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed at b62030b5b`",
+      "validation-receipt: id=7d94f22c494e0291 commit=b62030b5b0b22cbb02ff82c9053f8ae728dac393 kind=pytest plan=direct status=passed command=`python -m pytest -q backend/tests/qe_archive/test_qe_asset_lifecycle.py --disable-warnings --maxfail=1` result=`passed (51 cases)`",
+      "validation-receipt: id=bdcdefca109f8530 commit=b62030b5b0b22cbb02ff82c9053f8ae728dac393 kind=ruff plan=direct status=passed command=`ruff check and git diff --check` result=`passed`"
+    ],
+    "validation_evidence_digest": "077a7edc769a696211320f432a9789a84eee4cf85cf4f0b5b3decf3dba22d0ce"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qe.archive"
   ],
@@ -141,6 +173,11 @@
     "fingerprint": "d801a808bb17024e8c567e75",
     "source_event_id": "FE-20261121-d801a808bb17"
   },
+  "validation_evidence": [
+    "validation-receipt: id=7c019f72667dcd5a commit=b62030b5b0b22cbb02ff82c9053f8ae728dac393 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed at b62030b5b`",
+    "validation-receipt: id=7d94f22c494e0291 commit=b62030b5b0b22cbb02ff82c9053f8ae728dac393 kind=pytest plan=direct status=passed command=`python -m pytest -q backend/tests/qe_archive/test_qe_asset_lifecycle.py --disable-warnings --maxfail=1` result=`passed (51 cases)`",
+    "validation-receipt: id=bdcdefca109f8530 commit=b62030b5b0b22cbb02ff82c9053f8ae728dac393 kind=ruff plan=direct status=passed command=`ruff check and git diff --check` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
