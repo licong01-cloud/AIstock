@@ -365,6 +365,9 @@ def test_completion_dispatch_is_daily_brief_and_does_not_change_email(monkeypatc
         def __init__(self):
             self.events, self.sent, self.claim_routes = {}, set(), []
 
+        def completion_days(self, day):
+            return [day]
+
         def snapshot(self, day):
             return date(2026, 11, 16), [published()]
 
@@ -403,6 +406,9 @@ def test_partial_programs_leave_feishu_waiting_even_after_overdue_hour(monkeypat
     transport.config.update(email_enabled=False, webhook_type='feishu', advisory_feishu_completion_only=True)
 
     class Repository:
+        def completion_days(self, day):
+            return [day]
+
         def snapshot(self, day):
             return date(2026, 11, 16), [published(), {'program_id': 'p2', 'publication_status': 'WAITING_DATA'}]
 
@@ -418,3 +424,115 @@ def test_partial_programs_leave_feishu_waiting_even_after_overdue_hour(monkeypat
     ).run_once()
     assert result['feishu_completion']['status'] == 'WAITING_COMPLETION'
     assert result['queued'] == 0 and result['deliveries'] == []
+
+
+@pytest.mark.parametrize('now', [
+    datetime(2026, 11, 14, 12, tzinfo=CN),  # Saturday recovery.
+    datetime(2026, 11, 16, 9, 29, tzinfo=CN),  # Target day, before the existing deadline.
+])
+def test_late_completion_uses_original_day_key_and_real_publications(now):
+    day, target = date(2026, 11, 13), date(2026, 11, 16)
+    rows = [published(), {**published(), 'program_id': 'p2', 'list_version_id': 'v2',
+                          'published_at': datetime(2026, 11, 14, 11, tzinfo=CN)}]
+    event = completion_events_for_day(now, target, rows, decision_date=day)[0]
+    original = completion_events_for_day(datetime(2026, 11, 13, 22, tzinfo=CN), target, [published()])[0]
+    assert event['event_key'] == original['event_key']
+    assert event['decision_date'] == day
+    assert event['payload']['message'] == '2026-11-13 荐股任务已完成。'
+    assert rows[1]['published_at'].date() == date(2026, 11, 14)  # Never backdated.
+
+
+@pytest.mark.parametrize('now', [datetime(2026, 11, 16, 9, 30, tzinfo=CN),
+                                 datetime(2026, 11, 16, 10, tzinfo=CN)])
+def test_late_completion_does_not_enqueue_expired_batch(now):
+    assert completion_events_for_day(now, date(2026, 11, 16), [published()],
+                                     decision_date=date(2026, 11, 13)) == []
+
+
+@pytest.mark.parametrize('published_at', [datetime(2026, 11, 12, 22, tzinfo=CN),
+                                         datetime(2026, 11, 14, 13, tzinfo=CN),
+                                         datetime(2026, 11, 14, 11)])
+def test_late_completion_rejects_pre_decision_future_or_naive_publication(published_at):
+    with pytest.raises(ValueError, match='IDENTITY_INVALID'):
+        completion_events_for_day(datetime(2026, 11, 14, 12, tzinfo=CN), date(2026, 11, 16),
+                                  [{**published(), 'published_at': published_at}],
+                                  decision_date=date(2026, 11, 13))
+
+
+def test_service_weekend_catchup_and_target_preopen_reuse_one_daily_delivery(monkeypatch, transport):
+    monkeypatch.setenv('AISTOCK_ADVISORY_NOTIFICATIONS_ENABLED', 'true')
+    transport.config.update(email_enabled=False, webhook_type='feishu', advisory_feishu_completion_only=True)
+    day, target = date(2026, 11, 13), date(2026, 11, 16)
+    clock = [datetime(2026, 11, 14, 12, tzinfo=CN)]
+    events, sent, reads, sent_messages = {}, set(), [], []
+
+    class Repository:
+        def completion_days(self, today):
+            return [today, day] if today == target else [day, date(2026, 11, 12)]
+
+        def snapshot(self, requested):
+            reads.append(requested)
+            if requested == day:
+                return target, [published(), {**published(), 'program_id': 'p2', 'list_version_id': 'v2',
+                                              'published_at': datetime(2026, 11, 14, 11, tzinfo=CN)}]
+            return (date(2026, 11, 17), []) if requested == target else (day, [published()])
+
+        def enqueue(self, event, channel, now):
+            assert now == clock[0] and event['decision_date'] == day
+            if event['event_key'] in events:
+                return False
+            events[event['event_key']] = dict(event, channel=channel)
+            return True
+
+        def claim(self, now, channels, **kwargs):
+            return next((e for k, e in events.items() if k not in sent), None)
+
+        def finish(self, row, *, accepted, **kwargs):
+            assert accepted
+            sent.add(row['event_key'])
+            return 'SENT'
+
+    monkeypatch.setattr(transport, 'send_external_message', lambda *args: sent_messages.append(args) or True)
+    service = AdvisoryNotificationService(Repository(), transport, lambda: clock[0])
+    assert service.run_once()['queued'] == 1
+    assert reads == [day, date(2026, 11, 12)]  # No Saturday-only lookup.
+    assert service.run_once()['queued'] == 0
+    clock[0] = datetime(2026, 11, 16, 9, 29, tzinfo=CN)
+    assert service.run_once()['queued'] == 0
+    assert len(sent_messages) == 1
+    clock[0] = clock[0].replace(minute=30)
+    assert service.run_once()['queued'] == 0
+
+
+def test_completion_days_query_is_bounded_and_unknown_calendar_fails_closed():
+    from contextlib import contextmanager
+    from backend.services.advisory_forward.notification_repository import AdvisoryNotificationRepository
+
+    class Cursor:
+        session = {'is_trading': False}
+        calls = []
+
+        def execute(self, query, params):
+            self.calls.append((query, params))
+
+        def fetchone(self):
+            return self.session
+
+        def fetchall(self):
+            return [{'cal_date': date(2026, 11, 13)}, {'cal_date': date(2026, 11, 12)}]
+
+    cur = Cursor()
+    repo = AdvisoryNotificationRepository()
+
+    @contextmanager
+    def cursor():
+        yield cur
+
+    repo.cursor = cursor
+    day = date(2026, 11, 14)
+    assert repo.completion_days(day) == [date(2026, 11, 13), date(2026, 11, 12)]
+    assert len(cur.calls) == 2 and 'ORDER BY cal_date DESC LIMIT 2' in cur.calls[-1][0]
+    assert all(params == (day,) for _, params in cur.calls)
+    cur.session = None
+    with pytest.raises(ValueError, match='CALENDAR_UNKNOWN'):
+        repo.completion_days(day)

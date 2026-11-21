@@ -29,15 +29,24 @@
   "evidence_uris": [],
   "expected": "交易日或非交易日恢复后，所有启用日频策略包完成且目标日开盘前，可按原决策日生成一次全量飞书表格通知。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261121_BUG-2272-issue.json",
+      "backend/services/advisory_forward/notification_repository.py",
+      "backend/services/advisory_forward/notifications.py",
+      "backend/tests/advisory_model_first/test_advisory_feishu_sheets.py",
+      "backend/tests/advisory_model_first/test_advisory_notifications.py",
+      "backend/tests/advisory_model_first/test_advisory_notifications_pg.py"
+    ],
     "added_files": [],
     "changed_files": [
-      "backend/services/advisory_forward/notifications.py",
+      "tests/aistock_validation/bugs/20261121_BUG-2272-issue.json",
       "backend/services/advisory_forward/notification_repository.py",
+      "backend/services/advisory_forward/notifications.py",
+      "backend/tests/advisory_model_first/test_advisory_feishu_sheets.py",
       "backend/tests/advisory_model_first/test_advisory_notifications.py",
-      "backend/tests/advisory_model_first/test_advisory_notifications_pg.py",
-      "backend/tests/advisory_model_first/test_advisory_feishu_sheets.py"
+      "backend/tests/advisory_model_first/test_advisory_notifications_pg.py"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/advisory_forward/notifications.py",
@@ -120,11 +129,80 @@
   "fixed_at": null,
   "github_issue_number": 7419,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7419",
+  "implementation_review": {
+    "design_compliance": [
+      {
+        "evidence": "Real repository query, actual completion entry, actual detail builder/mobile/workbook and four-package production read-only probe; no placeholder delivery.",
+        "item": 1,
+        "result": "PASS"
+      },
+      {
+        "evidence": "Incomplete roster, unknown calendar, malformed identity and detail capture failures remain visible and fail closed; no synthetic prices or success.",
+        "item": 2,
+        "result": "PASS"
+      },
+      {
+        "evidence": "Original decision date identity, all current enabled daily packages, daily dedup and target 09:30 expiry retained; shared email/transport and UNKNOWN unchanged.",
+        "item": 3,
+        "result": "PASS"
+      },
+      {
+        "evidence": "No added approval, RBAC, workflow gate or service. Existing queue/lease/retry contracts reused.",
+        "item": 4,
+        "result": "PASS"
+      }
+    ],
+    "independent_review": false,
+    "review_owner": "current_agent",
+    "rounds": [
+      {
+        "findings": "Corrected new mobile_card test to pass the complete payload rather than snapshot. Failed node parametrizations rerun: 2 passed. Production date identity, actual now, expiry and immutable daily key reviewed.",
+        "kind": "correctness",
+        "outcome": "PASS after test harness repair",
+        "round": 1
+      },
+      {
+        "findings": "All 123 tests passed including real existing DEV dedupe, leases, retries, exact expiry, read-only production four-package catchup, true snapshot/mobile/workbook dates and complete rows. Queries bounded to two decision dates; frozen details not rebuilt on subsequent ticks.",
+        "kind": "completeness_and_regression",
+        "outcome": "PASS",
+        "round": 2
+      },
+      {
+        "findings": "Production source unchanged since full passing matrix and real four-package readonly probe. No shared transport, formal publisher, PIT or model edits.",
+        "kind": "final_source_revision",
+        "outcome": "PASS",
+        "round": 3,
+        "source_sha256": {
+          "backend/services/advisory_forward/notification_repository.py": "39e61fb237359ff8b34244698f39271c5ea15d1e5c929864e295523cb44642b4",
+          "backend/services/advisory_forward/notifications.py": "6877a416aa6c1d5c8eaeea6c70f9bc377ccec572278067c05c6536cce0a7efa6"
+        }
+      }
+    ]
+  },
   "last_seen_at": "2026-11-21T04:27:55.865840Z",
   "module": "advisory",
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pre_execution_review": {
+    "decision": "PROCEED_SOURCE_ONLY",
+    "invariants": [
+      "All currently enabled daily programs must be PUBLISHED with real list/binding/target identities",
+      "Deadline remains target trading day 09:30; no expired catch-up",
+      "No fabricated clock, timestamps, prices or UNKNOWN values",
+      "Legacy email and shared module transports unchanged",
+      "No production DML, live send, backend control, inference, training or activation"
+    ],
+    "plan": "Bound lookup to latest two trading decision dates; evaluate each batch with original decision date and actual current time; reuse existing detail snapshot decision_date argument and delivery key, leases, retries and expiry.",
+    "validation": [
+      "Cross-day and weekend recovery, mixed publication dates, target-day preopen and exact expiry",
+      "Incomplete roster and invalid identity fail closed",
+      "Original-day dedup across retries and completion/detail modes",
+      "Actual detail builder and mobile/workbook retain decision date, full lists and actual captured_at",
+      "Bounded calendar query and real existing DEV database regression",
+      "Two current-agent review passes and final revision review; required CI before source merge"
+    ]
+  },
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -137,11 +215,24 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "backend_restart_required": true,
+    "business_smoke_contract_id": "scheduler_status",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/forward/status",
+    "fresh_process_evidence": [
+      "{\"bounded_decision_dates\": 2, \"captured_at\": \"2026-11-21T12:33:50.688732+08:00\", \"database_writes\": 0, \"decision_date\": \"2026-11-20\", \"eligible_event_count\": 1, \"external_sends\": 0, \"process_control\": false, \"roster_count\": 4, \"schema\": \"advisory_notification_readonly_catchup_v1\", \"source_sha256\": {\"backend/services/advisory_forward/notification_repository.py\": \"39e61fb237359ff8b34244698f39271c5ea15d1e5c929864e295523cb44642b4\", \"backend/services/advisory_forward/notifications.py\": \"6877a416aa6c1d5c8eaeea6c70f9bc377ccec572278067c05c6536cce0a7efa6\"}, \"status\": \"PASS\", \"target_date\": \"2026-11-23\"}",
+      "Fresh pytest process imported persistent task source and passed all 123 direct notification/detail/mobile/DEV PostgreSQL regressions; no external sends or user backend process control."
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -159,6 +250,29 @@
   "trigger_condition": {
     "fingerprint": "b0a3e140674eceddb1280c69",
     "source_event_id": "FE-20261121-b0a3e140674e"
+  },
+  "validation_summary": {
+    "direct_result": "123 passed, 0 skipped",
+    "existing_dev": "8 PostgreSQL tests passed using existing aistock_dev only; no production DML",
+    "junit_sha256": "01604d20b2ff06f263be7ddcec78715bb388771fe6a5d41b2c191bd46226f6a3",
+    "readonly_source_validation": {
+      "bounded_decision_dates": 2,
+      "captured_at": "2026-11-21T12:33:50.688732+08:00",
+      "database_writes": 0,
+      "decision_date": "2026-11-20",
+      "eligible_event_count": 1,
+      "external_sends": 0,
+      "process_control": false,
+      "roster_count": 4,
+      "schema": "advisory_notification_readonly_catchup_v1",
+      "source_sha256": {
+        "backend/services/advisory_forward/notification_repository.py": "39e61fb237359ff8b34244698f39271c5ea15d1e5c929864e295523cb44642b4",
+        "backend/services/advisory_forward/notifications.py": "6877a416aa6c1d5c8eaeea6c70f9bc377ccec572278067c05c6536cce0a7efa6"
+      },
+      "status": "PASS",
+      "target_date": "2026-11-23"
+    },
+    "static_result": "Changed-file Ruff passed; exact six-file nox l0 passed with zero blockers; diff --check passed"
   },
   "verification_budget": {
     "budget": "standard",

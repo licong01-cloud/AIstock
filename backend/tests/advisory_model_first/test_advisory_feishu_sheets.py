@@ -364,13 +364,18 @@ def test_dedicated_detail_configuration_isolated_and_ambiguous_send_not_safe_ret
     assert missing.config['advisory_feishu_configuration_error'] == 'FEISHU_DETAILS_CONFIGURATION_MISSING'
 
 
-def test_service_queues_details_once_uses_separate_route_and_freezes_retry(monkeypatch):
+@pytest.mark.parametrize('clock', [NOW, datetime(2026, 11, 20, 8, tzinfo=CN)])
+def test_service_queues_details_once_uses_separate_route_and_freezes_retry(monkeypatch, clock):
     monkeypatch.setenv('AISTOCK_ADVISORY_NOTIFICATIONS_ENABLED', 'true')
     events, sent = [], []
     class Repo:
+        def completion_days(self, day):
+            return [NOW.date()]
         def snapshot(self, day):
+            assert day == NOW.date()
             return TARGET, ROSTER
         def detail_event_exists(self, key, day):
+            assert day == NOW.date()
             return bool(events)
         def enqueue(self, event, channel, now):
             events.append(copy.deepcopy(event))
@@ -391,22 +396,52 @@ def test_service_queues_details_once_uses_separate_route_and_freezes_retry(monke
                     webhook_enabled=True, webhook_type='feishu', webhook_url='configured'),
         detail_delivery=lambda: DetailSheetDelivery(Remote()), send_detail_card=lambda *_: True,
         send_external_message=lambda *_: True)
-    builder = SimpleNamespace(build=lambda *args: payload()['detail_snapshot'])
-    service = AdvisoryNotificationService(Repo(), transport, lambda: NOW, builder)
+    builder = DetailSnapshotBuilder(History(), Returns(), lambda items: items)
+    service = AdvisoryNotificationService(Repo(), transport, lambda: clock, builder)
     first = service.run_once()
     assert first['queued'] == 1 and first['deliveries'][0]['status'] == 'SENT'
     assert events[0]['payload']['delivery_route'] == FEISHU_DETAIL_ROUTE
     assert events[0]['event_key'] == completion_events_for_day(NOW, TARGET, ROSTER)[0]['event_key']
     assert first['feishu_detail_sheet']['status'] == 'EVENT_READY'
-    builder.build = lambda *_: pytest.fail('second tick re-fetched frozen quotes')
+    snapshot = events[0]['payload']['detail_snapshot']
+    assert snapshot['decision_date'] == str(NOW.date())
+    assert snapshot['target_date'] == str(TARGET)
+    assert snapshot['captured_at'] == clock.isoformat()
+    assert len(snapshot['programs'][0]['cells']) == 4  # All recommended and exit rows.
+    assert workbook_tables(snapshot)[1][1][1] == ['决策日', str(NOW.date())]
+    from backend.services.advisory_forward.notification_presentation import mobile_card
+    assert str(NOW.date()) in str(mobile_card(events[0]['payload'], 'https://my.feishu.cn/sheets/doc1'))
+    builder.build = lambda *a, **k: pytest.fail('second tick re-fetched frozen quotes')
     assert service.run_once()['queued'] == 0
 
 
 def test_incomplete_roster_does_not_capture_or_send(monkeypatch):
     monkeypatch.setenv('AISTOCK_ADVISORY_NOTIFICATIONS_ENABLED', 'true')
-    repo = SimpleNamespace(snapshot=lambda _: (TARGET, [dict(ROSTER[0], publication_status='WAITING_DATA')]),
+    repo = SimpleNamespace(completion_days=lambda day: [day],
+                           snapshot=lambda _: (TARGET, [dict(ROSTER[0], publication_status='WAITING_DATA')]),
                            claim=lambda *a, **k: None)
     transport = SimpleNamespace(config=dict(advisory_feishu_completion_only=True, advisory_feishu_details=True,
                                            webhook_enabled=True, webhook_type='feishu', webhook_url='configured'))
     builder = SimpleNamespace(build=lambda *_: pytest.fail('incomplete publication'))
     assert AdvisoryNotificationService(repo, transport, lambda: NOW, builder).run_once()['queued'] == 0
+
+
+def test_cross_day_detail_capture_failure_remains_visible_and_never_queues(monkeypatch):
+    monkeypatch.setenv('AISTOCK_ADVISORY_NOTIFICATIONS_ENABLED', 'true')
+    repo = SimpleNamespace(completion_days=lambda day: [NOW.date()],
+                           snapshot=lambda day: (TARGET, ROSTER),
+                           detail_event_exists=lambda key, day: False,
+                           enqueue=lambda *a: pytest.fail('failed capture must not queue'),
+                           claim=lambda *a, **k: None)
+    transport = SimpleNamespace(config=dict(advisory_feishu_completion_only=True, advisory_feishu_details=True,
+                                           webhook_enabled=True, webhook_type='feishu', webhook_url='configured'))
+
+    def failed_build(*args, **kwargs):
+        assert kwargs['decision_date'] == NOW.date()
+        raise DetailDeliveryError('DETAIL_LIST_IDENTITY_INVALID')
+
+    result = AdvisoryNotificationService(repo, transport, lambda: datetime(2026, 11, 20, 8, tzinfo=CN),
+                                         SimpleNamespace(build=failed_build)).run_once()
+    assert result['queued'] == 0 and result['deliveries'] == []
+    assert result['feishu_detail_sheet'] == {'status': 'DETAIL_SNAPSHOT_FAILED',
+                                            'reason_code': 'DETAIL_LIST_IDENTITY_INVALID'}
