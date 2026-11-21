@@ -470,6 +470,7 @@ def run_history_ingestion(conn, args, job_id, end_date: dt.date) -> Dict[str, An
                 calls_per_minute=args.history_reconcile_rate_per_minute,
                 max_pages=args.history_reconcile_max_pages,
             ).reconcile(end_date=effective_end, symbols=args.history_reconcile_symbol,
+                        scope_date=end_date if args.history_reconcile_symbol else None,
                         dry_run=dry_run, independent=True, progress=checkpoint, completed=completed)
             if latest and not dry_run:
                 checkpoint(latest, force=True)

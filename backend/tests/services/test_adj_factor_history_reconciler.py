@@ -441,6 +441,31 @@ def test_reconcile_rejects_an_unbounded_nontrading_source_omission() -> None:
     assert repository.apply_calls == 0
 
 
+def test_dated_repair_admits_historical_listing_and_reads_current_suffix(monkeypatch):
+    symbol = "600001.SH"
+    local = _snapshot(symbol, _rows(symbol, [(DAY_3, "3")]))
+    repository = _Repository({symbol: local}, {symbol: frozenset({DAY_3})})
+    provider_rows = _provider_rows(symbol, [(DAY_1, "2"), (DAY_3, "3")])
+    reconciler = _reconciler(repository, _SequencedProvider({symbol: [provider_rows, provider_rows]}))
+
+    def scoped_listing(*, end_date, symbols):
+        assert end_date == DAY_1 and symbols == [symbol]
+        return [SymbolScope(symbol, DAY_1)]
+
+    def current_history(requested, *, end_date):
+        assert requested == symbol and end_date == DAY_3
+        return local
+
+    monkeypatch.setattr(repository, "list_symbol_scopes", scoped_listing)
+    monkeypatch.setattr(repository, "load_snapshot", current_history)
+
+    receipt = reconciler.reconcile(end_date=DAY_3, scope_date=DAY_1, symbols=[symbol], independent=True)
+
+    assert receipt["failures"] == []
+    assert receipt["written_row_count"] == 2
+    assert [row.trade_date for row in repository.snapshots[symbol].rows] == [DAY_1, DAY_3]
+
+
 @pytest.mark.parametrize("restated", [False, True])
 def test_reconcile_preserves_post_delist_rows_without_requiring_provider_coverage(restated):
     symbol = "600001.SH"
