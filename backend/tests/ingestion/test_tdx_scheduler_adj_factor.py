@@ -76,14 +76,18 @@ def test_exact_factor_repair_uses_only_current_named_supported_gaps():
     def fetch(query, params):
         queries.append((query, params))
         if "unnest" in query:
-            return [{"ts_code": "000001.SZ"}]
+            return [
+                {"ts_code": "000001.SZ", "collectable": True, "retired_on_date": False},
+                {"ts_code": "600001.SH", "collectable": True, "retired_on_date": True},
+            ]
         return [{"data_revision": 3, "validated_revision": 3, "validation_status": "INCOMPLETE",
                  "validation": {"gaps": [{"classification": "MISSING",
-                     "symbols": ["000001.SZ", "000001.SZ", "920001.BJ"]}]}}]
+                     "symbols": ["000001.SZ", "000001.SZ", "600001.SH", "920001.BJ"]}]}}]
     scheduler._fetchall = fetch
     target = {"target_date": dt.date(2018, 8, 8)}
     assert scheduler._scope_adj_factor_repair(target)
     assert target["metadata"]["history_reconcile_symbols"] == ["000001.SZ"]
+    assert target["metadata"]["history_unavailable_symbols"] == []
     assert len(queries) == 2 and "FROM market.dataset_date_refresh_audit" in queries[0][0]
     assert "character(9)[]" in queries[1][0] and "EXISTS" in queries[1][0]
 
@@ -119,7 +123,7 @@ def test_first_listing_factor_gap_is_fetchable_without_local_prices(monkeypatch)
                      "validation": {"gaps": [{"classification": "MISSING", "symbols": ["688827.SH"]}]}}]
         # Independent listed identity is sufficient to FETCH, never to certify a factor.
         if "stock_basic" in query and "list_date" in query:
-            return [{"ts_code": "688827.SH"}]
+            return [{"ts_code": "688827.SH", "collectable": True, "retired_on_date": False}]
         return []
 
     scheduler._fetchall = fetch
@@ -127,6 +131,51 @@ def test_first_listing_factor_gap_is_fetchable_without_local_prices(monkeypatch)
     assert scheduler._scope_adj_factor_repair(target)
     assert target["metadata"]["history_reconcile_symbols"] == ["688827.SH"]
     assert len(queries) == 2
+
+
+def test_retired_only_factor_gap_returns_to_validation_without_fetch(monkeypatch):
+    import backend.ingestion.tdx_scheduler as scheduling
+    import backend.services.data_integrity.repository as integrity
+
+    scheduler = object.__new__(TDXScheduler)
+    day = dt.date(2010, 1, 4)
+    repo = Mock()
+    enqueue = Mock()
+    conn = object()
+    monkeypatch.setattr(scheduling, "DataSyncTargetRepository", lambda: repo)
+    monkeypatch.setattr(scheduling, "get_conn", lambda **kwargs: nullcontext(conn))
+    monkeypatch.setattr(integrity, "enqueue_validation", enqueue)
+    verdict = {"data_revision": 1, "validated_revision": 1, "validation_status": "INCOMPLETE",
+               "validation": {"gaps": [{"classification": "MISSING", "symbols": ["600001.SH"]}]}}
+    scheduler._fetchall = Mock(side_effect=[
+        [verdict], [{"ts_code": "600001.SH", "collectable": True, "retired_on_date": True}],
+    ])
+
+    assert scheduler._scope_adj_factor_repair({"target_id": "retired", "target_date": day}) is False
+    enqueue.assert_called_once_with(conn, "adj_factor", day)
+    repo.mark_retry.assert_called_once()
+    repo.mark_reconciled.assert_not_called()
+
+
+def test_named_retry_passes_the_target_date_and_protects_the_newer_local_suffix(monkeypatch):
+    target_day = dt.date(2009, 7, 7)
+    latest_day = dt.date(2026, 11, 20)
+    repo = SimpleNamespace(writer_lock=nullcontext)
+    reconcile = Mock(return_value={})
+    monkeypatch.setattr(ingest_adj_factor, "PostgresAdjFactorHistoryRepository", lambda conn: repo)
+    monkeypatch.setattr(ingest_adj_factor, "_get_max_trade_date", lambda conn: latest_day)
+    monkeypatch.setattr(ingest_adj_factor, "AdjFactorHistoryReconciler",
+                        lambda **kwargs: SimpleNamespace(reconcile=reconcile))
+    args = SimpleNamespace(
+        history_reconcile_symbol=["600001.SH"], history_reconcile_dry_run=True,
+        history_reconcile_workers=1, history_reconcile_rate_per_minute=0, history_reconcile_max_pages=4,
+    )
+
+    ingest_adj_factor.run_history_ingestion(object(), args, "named-retry", target_day)
+
+    assert reconcile.call_args.kwargs["scope_date"] == target_day
+    assert reconcile.call_args.kwargs["end_date"] == latest_day
+    assert reconcile.call_args.kwargs["symbols"] == ["600001.SH"]
 
 
 def test_existing_factor_job_preserves_scheduler_target_identity():

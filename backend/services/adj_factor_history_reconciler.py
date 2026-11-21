@@ -815,6 +815,7 @@ class AdjFactorHistoryReconciler:
 
     def reconcile(
         self, *, end_date: dt.date, symbols: Sequence[str] | None = None,
+        scope_date: dt.date | None = None,
         dry_run: bool = False, independent: bool = False,
         progress: Callable[[dict[str, Any]], None] | None = None,
         completed: Mapping[str, str] | None = None,
@@ -822,7 +823,9 @@ class AdjFactorHistoryReconciler:
         """Keep the atomic API; daily orchestration opts into independent securities."""
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
-        scopes = tuple(self.repository.list_symbol_scopes(end_date=end_date, symbols=symbols))
+        if scope_date is not None and (not symbols or scope_date > end_date):
+            raise ValueError("dated adj_factor scope requires explicit symbols and must not exceed the history cutoff")
+        scopes = tuple(self.repository.list_symbol_scopes(end_date=scope_date or end_date, symbols=symbols))
         if not independent:
             return self._reconcile_atomic(end_date=end_date, scopes=scopes, dry_run=dry_run)
         successes: dict[str, str] = {}

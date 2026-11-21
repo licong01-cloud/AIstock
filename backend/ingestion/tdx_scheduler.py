@@ -1701,6 +1701,8 @@ class TDXScheduler:
         Unproven/obsolete verdicts go back to validation, never to a full scan.
         """
         day = self._coerce_target_date(target.get("target_date"))
+        if day is None:
+            return False
         records = self._fetchall("""SELECT data_revision,validated_revision,validation_status,
             metadata->'validation' AS validation FROM market.dataset_date_refresh_audit
             WHERE dataset='adj_factor' AND trade_date=%s AND data_source='canonical_db'""", (day,))
@@ -1713,31 +1715,41 @@ class TDXScheduler:
         if (row.get("validation_status") == "INCOMPLETE"
                 and row.get("data_revision") == row.get("validated_revision") and symbols
                 and all(gap.get("classification") in {"MISSING", "INVALID"} for gap in gaps)):
-            # Match the existing reconciler's input contract before spawning
-            # it. A listed IPO is independent collection scope even when BOTH
-            # local feeds missed its first day. Ended unknown histories keep
-            # their existing bounded deferral, not failing subprocess loops.
-            observed = self._fetchall("""SELECT code AS ts_code FROM unnest(%s::character(9)[]) AS code
-                WHERE EXISTS (SELECT 1 FROM market.adj_factor f
-                    WHERE f.ts_code=code::text AND f.trade_date<=%s)
-                   OR EXISTS (SELECT 1 FROM market.kline_daily_raw p
-                    WHERE p.ts_code=code AND p.trade_date<=%s
-                      AND (p.volume_hand>0 OR p.amount_li>0))
-                   OR EXISTS (SELECT 1 FROM market.stock_basic b WHERE b.ts_code=code
-                      AND b.list_date<=%s AND (b.delist_date IS NULL OR b.delist_date>%s))""",
-                (symbols, day, day, day, day))
-            available = {str(item["ts_code"]).strip() for item in observed}
-            missing = sorted(set(symbols)-available)
+            from ..data_service.security_source_identity import load_default_security_source_identity_manifest
+            authority = load_default_security_source_identity_manifest()
+            quote_codes = [authority.resolve(code, day, "market.kline_daily_raw").source_ts_code for code in symbols]
+            observed = self._fetchall("""WITH requested AS (
+                SELECT code, quote_code, %s::date AS day
+                FROM unnest(%s::character(9)[], %s::character(9)[]) AS code_pairs(code, quote_code)
+            )
+            SELECT r.code AS ts_code,
+                (b.list_date<=r.day AND (b.delist_date IS NULL OR b.delist_date>r.day))
+                OR EXISTS (SELECT 1 FROM market.adj_factor f
+                    WHERE f.ts_code=r.code::text AND f.trade_date<=r.day)
+                OR EXISTS (SELECT 1 FROM market.kline_daily_raw p
+                    WHERE p.ts_code=r.code AND p.trade_date<=r.day
+                      AND (p.volume_hand>0 OR p.amount_li>0)) AS collectable,
+                b.list_status='D' AND b.delist_date<=r.day
+                AND NOT EXISTS (SELECT 1 FROM market.kline_daily_raw p
+                    WHERE p.ts_code IN (r.code,r.quote_code) AND p.trade_date=r.day
+                      AND (p.volume_hand>0 OR p.volume_shares>0 OR p.amount_li>0)) AS retired_on_date
+            FROM requested r LEFT JOIN market.stock_basic b ON b.ts_code=r.code""",
+                (day, symbols, quote_codes))
+            retired = {str(item["ts_code"]).strip() for item in observed if item["retired_on_date"]}
+            available = {str(item["ts_code"]).strip() for item in observed if item["collectable"]} - retired
+            missing = sorted(set(symbols) - available - retired)
             symbols = sorted(set(symbols) & available)
-            if not symbols:
+            if not symbols and missing:
                 DataSyncTargetRepository().mark_retry(str(target["target_id"]),
                     retry_after=_now() + dt.timedelta(days=1),
                     reason="factor_repair_local_history_unavailable",
                     context={"source_gap_preserved": True, "missing_symbols": missing})
                 return False
-            target["metadata"] = {**(target.get("metadata") or {}),
-                "history_reconcile_symbols": symbols, "history_unavailable_symbols": missing}
-            return True
+            if symbols:
+                target["metadata"] = {**(target.get("metadata") or {}),
+                    "history_reconcile_symbols": symbols, "history_unavailable_symbols": missing}
+                return True
+            # A retired-only gap needs a fresh canonical verdict, not a fetch.
         from ..services.data_integrity.repository import enqueue_validation
         with get_conn(autocommit=False, manage_transaction=True) as conn:
             enqueue_validation(conn, "adj_factor", day)
