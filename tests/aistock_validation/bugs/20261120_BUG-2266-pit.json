@@ -146,8 +146,8 @@
   },
   "first_seen_at": "2026-11-20T15:51:55.433225Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "19eaeda63efe3f9b5ac6de15b6e94fdd86310f26",
+  "fixed_at": "2026-11-21T02:29:17Z",
   "github_issue_number": 7396,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7396",
   "implementation_plan": [
@@ -163,6 +163,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7403",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -219,6 +220,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -230,7 +232,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2266",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "81ec41da30c6b988",
+    "recorded_at": "2026-11-21T02:30:31.664599Z",
+    "runtime_contract_digest": "7b1423491f0f2eea1820be95f724c6e1534b176b7ef4a2e67c186b77309ddb44",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "5f0a5ccce9e13d56f76236375d769ad787fe8b99",
+    "source_merge_commit": "19eaeda63efe3f9b5ac6de15b6e94fdd86310f26",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7403",
+    "validation_evidence": [
+      "validation-receipt: id=56808fb09156db8a commit=29833838c4e79e7968fd4f42fe28ad2f8ec4065b kind=pytest plan=direct status=passed command=`rtk pytest -q backend/tests/selection_center/test_canonical_pit_runtime.py backend/tests/selection_center/test_risk_policy.py backend/tests/paper_trading_v2/test_runtime_profile.py backend/tests/simulation_runtime/test_strategy_package_selection_service.py backend/tests/advisory_model_first/test_forward_publication.py backend/tests/advisory_model_first/test_forward_boundaries.py backend/tests/advisory_model_first/test_forward_date_clock.py backend/tests/paper_trading_v2/test_canonical_pit_control.py backend/tests/test_daily_data_integrity_inputs.py --maxfail=1 --junitxml=tmp/issue_workflow/BUG-2266/direct-regression.xml` result=`200 passed`",
+      "validation-receipt: id=ac72b18293567d92 commit=29833838c4e79e7968fd4f42fe28ad2f8ec4065b kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/selection_center/canonical_pit_runtime.py backend/services/selection_center/runtime_profile.py backend/services/selection_center/risk_policy.py backend/services/simulation_signal/strategy_package_selection.py backend/tests/selection_center/test_canonical_pit_runtime.py backend/tests/selection_center/test_risk_policy.py backend/tests/simulation_runtime/test_strategy_package_selection_service.py backend/tests/advisory_model_first/test_forward_publication.py tests/aistock_validation/bugs/20261120_BUG-2266-pit.json` result=`passed`"
+    ],
+    "validation_evidence_digest": "64e0a6ed614762082749107c4086de953f86a5fabd0433cfdcd7296d9d421be4"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "advisory"
   ],
@@ -239,6 +263,10 @@
     "fingerprint": "ae1afe9c7f263309bbae4025",
     "source_event_id": "FE-20261120-ae1afe9c7f26"
   },
+  "validation_evidence": [
+    "validation-receipt: id=56808fb09156db8a commit=29833838c4e79e7968fd4f42fe28ad2f8ec4065b kind=pytest plan=direct status=passed command=`rtk pytest -q backend/tests/selection_center/test_canonical_pit_runtime.py backend/tests/selection_center/test_risk_policy.py backend/tests/paper_trading_v2/test_runtime_profile.py backend/tests/simulation_runtime/test_strategy_package_selection_service.py backend/tests/advisory_model_first/test_forward_publication.py backend/tests/advisory_model_first/test_forward_boundaries.py backend/tests/advisory_model_first/test_forward_date_clock.py backend/tests/paper_trading_v2/test_canonical_pit_control.py backend/tests/test_daily_data_integrity_inputs.py --maxfail=1 --junitxml=tmp/issue_workflow/BUG-2266/direct-regression.xml` result=`200 passed`",
+    "validation-receipt: id=ac72b18293567d92 commit=29833838c4e79e7968fd4f42fe28ad2f8ec4065b kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/selection_center/canonical_pit_runtime.py backend/services/selection_center/runtime_profile.py backend/services/selection_center/risk_policy.py backend/services/simulation_signal/strategy_package_selection.py backend/tests/selection_center/test_canonical_pit_runtime.py backend/tests/selection_center/test_risk_policy.py backend/tests/simulation_runtime/test_strategy_package_selection_service.py backend/tests/advisory_model_first/test_forward_publication.py tests/aistock_validation/bugs/20261120_BUG-2266-pit.json` result=`passed`"
+  ],
   "validation_receipts": [
     {
       "activation_generation": 1,
