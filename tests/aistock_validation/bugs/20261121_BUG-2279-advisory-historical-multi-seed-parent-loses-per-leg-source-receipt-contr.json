@@ -136,8 +136,8 @@
   },
   "first_seen_at": "2026-11-21T18:18:24.666836Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "22d71147c1a8c490982fa89db64b907cc3ae9890",
+  "fixed_at": "2026-11-21T18:51:33Z",
   "github_issue_number": 7441,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7441",
   "last_seen_at": "2026-11-21T18:18:24.666836Z",
@@ -145,6 +145,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7442",
   "pre_execution_scope_review": {
     "frozen_replay_compatibility": "The changed shared evidence adapter is outside the frozen R5/native inference file closure. Preserve original request, PIT and source plan; do not rewrite or synthesize native score files. Runtime retry must use the existing native resume API and original input guards. No silent new binding, source substitution or manual evidence bypass.",
     "runtime": "Both pilot runs FAILED after native scoring, zero lists. No active owned inference remains. Combine BUG-2278 and BUG-2279 in one later user-owned backend restart.",
@@ -239,6 +240,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -250,7 +252,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2279",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "b196d38ca0f12e9c",
+    "recorded_at": "2026-11-21T18:53:26.814085Z",
+    "runtime_contract_digest": "0733eddaf2395804c293a15848bcfddd045fc6c81141d0efa0fe5cc30dc1ad9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "a062ae939df319902684542c22d5287fbd834933",
+    "source_merge_commit": "22d71147c1a8c490982fa89db64b907cc3ae9890",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7442",
+    "validation_evidence": [
+      "python -m pytest backend/tests/strategy_package/test_multi_seed_package_assets.py backend/tests/strategy_package/test_multi_alpha_live_selection.py backend/tests/strategy_package/test_multi_alpha_signal_preparation.py backend/tests/advisory_historical_range/test_task_input_sources.py backend/tests/advisory_historical_range/test_input_source_plan.py -q --basetemp X:/AIstock_temp/BUG-2279-final-matrix-20261122 -> 73 passed",
+      "python -m nox -s l0 -> passed"
+    ],
+    "validation_evidence_digest": "3bf3a04a4b696ac29961817a7671ac823df41c44194a4dcd7eafb3fa478fe07a"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "advisory"
   ],
@@ -259,6 +283,10 @@
     "fingerprint": "f1508b4b3eb4d1d4a40e444e",
     "source_event_id": "FE-20261121-f1508b4b3eb4"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/strategy_package/test_multi_seed_package_assets.py backend/tests/strategy_package/test_multi_alpha_live_selection.py backend/tests/strategy_package/test_multi_alpha_signal_preparation.py backend/tests/advisory_historical_range/test_task_input_sources.py backend/tests/advisory_historical_range/test_input_source_plan.py -q --basetemp X:/AIstock_temp/BUG-2279-final-matrix-20261122 -> 73 passed",
+    "python -m nox -s l0 -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
