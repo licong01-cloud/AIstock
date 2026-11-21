@@ -13,7 +13,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2266",
-  "closed_at": null,
+  "closed_at": "2026-11-21T04:27:38.643877Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -219,10 +219,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-2266\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2266",
+      "business_smoke_semantic": {
+        "contract_id": "scheduler_status",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "e49ea55d85a17e74db97ae002f4da0d40fbf7b0441f6386d5a270dbc76470bf6",
+      "contract_digest": "7b1423491f0f2eea1820be95f724c6e1534b176b7ef4a2e67c186b77309ddb44",
+      "expected_identity": "19eaeda63efe3f9b5ac6de15b6e94fdd86310f26",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-11-21T04:24:15.413026Z",
+      "mode": "read_only",
+      "observed_identity": "2b88e0a83cb80dca4f5931298837938eacaf603a",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "7510ff54ef172bdfe4521d23082a66ecf7597ee90f958429f68f8066dfb056f2",
+      "receipt_sha256": "2b4bcd759fce7203dc54b0a466744580e9b22a130b38c22673e81f7cc5956515",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "4ad2fe4c440c65d3e1b08964fc94ced9b41fe10c67c3e775efde43602cdf6fd4",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -254,7 +276,7 @@
     ],
     "validation_evidence_digest": "64e0a6ed614762082749107c4086de953f86a5fabd0433cfdcd7296d9d421be4"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "advisory"
   ],
@@ -265,7 +287,8 @@
   },
   "validation_evidence": [
     "validation-receipt: id=56808fb09156db8a commit=29833838c4e79e7968fd4f42fe28ad2f8ec4065b kind=pytest plan=direct status=passed command=`rtk pytest -q backend/tests/selection_center/test_canonical_pit_runtime.py backend/tests/selection_center/test_risk_policy.py backend/tests/paper_trading_v2/test_runtime_profile.py backend/tests/simulation_runtime/test_strategy_package_selection_service.py backend/tests/advisory_model_first/test_forward_publication.py backend/tests/advisory_model_first/test_forward_boundaries.py backend/tests/advisory_model_first/test_forward_date_clock.py backend/tests/paper_trading_v2/test_canonical_pit_control.py backend/tests/test_daily_data_integrity_inputs.py --maxfail=1 --junitxml=tmp/issue_workflow/BUG-2266/direct-regression.xml` result=`200 passed`",
-    "validation-receipt: id=ac72b18293567d92 commit=29833838c4e79e7968fd4f42fe28ad2f8ec4065b kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/selection_center/canonical_pit_runtime.py backend/services/selection_center/runtime_profile.py backend/services/selection_center/risk_policy.py backend/services/simulation_signal/strategy_package_selection.py backend/tests/selection_center/test_canonical_pit_runtime.py backend/tests/selection_center/test_risk_policy.py backend/tests/simulation_runtime/test_strategy_package_selection_service.py backend/tests/advisory_model_first/test_forward_publication.py tests/aistock_validation/bugs/20261120_BUG-2266-pit.json` result=`passed`"
+    "validation-receipt: id=ac72b18293567d92 commit=29833838c4e79e7968fd4f42fe28ad2f8ec4065b kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/selection_center/canonical_pit_runtime.py backend/services/selection_center/runtime_profile.py backend/services/selection_center/risk_policy.py backend/services/simulation_signal/strategy_package_selection.py backend/tests/selection_center/test_canonical_pit_runtime.py backend/tests/selection_center/test_risk_policy.py backend/tests/simulation_runtime/test_strategy_package_selection_service.py backend/tests/advisory_model_first/test_forward_publication.py tests/aistock_validation/bugs/20261120_BUG-2266-pit.json` result=`passed`",
+    "python scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-2266 --target backend-main --expected-identity 19eaeda63efe3f9b5ac6de15b6e94fdd86310f26 -> passed"
   ],
   "validation_receipts": [
     {
