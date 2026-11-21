@@ -30,7 +30,13 @@ from .qe_active_execution_capacity import (
 )
 from .qe_batch_execution_policy import CPU_NODE, GPU_NODE, loop_compute_kind
 from .qe_execution_reservation import PREPARED_WORKSPACE_PARAM
-from .qe_run_registry import QE_RUN_REGISTRATION_PARAM, QERunRegistry, build_qe_run_registration
+from .qe_run_registry import (
+    QE_ARCHIVE_REPLAY_SOURCE_PARAM,
+    QE_RUN_REGISTRATION_PARAM,
+    QERunRegistry,
+    build_qe_run_registration,
+    normalize_archive_replay_source,
+)
 from .qe_workspace_client import QEWorkspaceClient
 
 BuildPayload = Callable[[Mapping[str, Any]], Awaitable[QEWorkspaceSubmissionPayload]]
@@ -214,10 +220,22 @@ class QEPreparedWorkspaceBatch:
             model_id=config.get("model_id"), factor_names=factor_names, strategy_id=config.get("strategy_id"),
             data_split=split, task_id=payload.task_id, loop_index=payload.loop_index,
         )
+        params.pop(QE_ARCHIVE_REPLAY_SOURCE_PARAM, None)
+        if config.get("workload_mode") == "PREDICTION_REPLAY":
+            source_ref = normalize_archive_replay_source(
+                payload.experiment_files.get("qe_prediction_replay_source_ref.json")
+            )
+            if source_ref is not None:
+                params[QE_ARCHIVE_REPLAY_SOURCE_PARAM] = source_ref
         existing = self._composer._get_experiment_record(job.experiment_id)
         if existing is not None:
             registered = existing.get("custom_params") or {}
             if any(registered.get(k) != params[k] for k in (PREPARED_WORKSPACE_PARAM, QE_RUN_REGISTRATION_PARAM)):
+                raise ValueError("QE_PREPARED_WORKSPACE_EXISTING_IDENTITY_CHANGED")
+            if QE_ARCHIVE_REPLAY_SOURCE_PARAM not in registered:
+                # Resume legacy admissions with their original submitted config.
+                params.pop(QE_ARCHIVE_REPLAY_SOURCE_PARAM, None)
+            elif registered[QE_ARCHIVE_REPLAY_SOURCE_PARAM] != params.get(QE_ARCHIVE_REPLAY_SOURCE_PARAM):
                 raise ValueError("QE_PREPARED_WORKSPACE_EXISTING_IDENTITY_CHANGED")
             return params
         self._registry.reserve_single(

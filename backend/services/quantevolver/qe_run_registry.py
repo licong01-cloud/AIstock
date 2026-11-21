@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections import Counter
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
@@ -17,10 +18,12 @@ from typing import Any
 from psycopg2.extras import RealDictCursor
 
 from ...db.pg_pool import get_conn
+from .qe_execution_reservation import PREPARED_WORKSPACE_PARAM
 
 
 QE_RUN_REGISTRATION_PARAM = "_qe_run_registration"
 QE_RUN_REGISTRATION_SCHEMA = "qe_run_registration_v1"
+QE_ARCHIVE_REPLAY_SOURCE_PARAM = "_qe_archive_replay_source"
 QE_RUN_PURPOSES = frozenset({"research", "validation"})
 QE_RUN_SOURCE_TYPES = frozenset({"ui", "mcp", "scheduler", "agent"})
 QE_RUN_CONSUMERS = frozenset({"qe_mainline", "advisory"})
@@ -37,6 +40,55 @@ _CANONICAL_STATUS_ALIASES = {
     "timeout": "failed",
     "canceled": "cancelled",
 }
+
+
+def prepared_workspace_loop_index(
+    params: Mapping[str, Any], *, task_id: str | None = None, loop_id: str | None = None,
+) -> int | None:
+    """Read the exact workspace Loop from the two durable admission contracts."""
+    if PREPARED_WORKSPACE_PARAM not in params:
+        return None
+    prepared = _mapping(params[PREPARED_WORKSPACE_PARAM])
+    registration = _mapping(params.get(QE_RUN_REGISTRATION_PARAM))
+    registered_task, index = registration.get("task_id"), registration.get("loop_index")
+    if not (
+        registration.get("schema_version") == QE_RUN_REGISTRATION_SCHEMA
+        and registration.get("run_kind") == "single"
+        and isinstance(registered_task, str) and registered_task
+        and registered_task == prepared.get("task_id")
+        and type(index) is int and index > 0
+        and prepared.get("loop_id") == f"Loop{index}"
+        and prepared.get("workload") in ("TRAIN_ONLY", "PREDICTION_REPLAY")
+        and (not task_id or task_id == registered_task)
+        and (not loop_id or loop_id in (f"Loop{index}", f"{registered_task}_Loop{index}"))
+    ):
+        raise ValueError("QE_PREPARED_ARCHIVE_WORKSPACE_IDENTITY_MISMATCH")
+    return index
+
+
+def normalize_archive_replay_source(ref: Any) -> dict[str, Any] | None:
+    """Recognize one frozen producer reference. Composed scores may have no single producer."""
+    if isinstance(ref, str):
+        try:
+            ref = json.loads(ref)
+        except ValueError:
+            return None
+    data = _mapping(ref)
+    task, loop, digest, size = (data.get(key) for key in (
+        "source_task_id", "source_loop_index", "sha256", "size_bytes",
+    ))
+    if not (
+        data.get("schema_version") == "qe_prediction_replay_source_ref_v1"
+        and isinstance(task, str) and re.fullmatch(r"[A-Za-z0-9_-]+", task)
+        and type(loop) is int and loop > 0
+        and isinstance(digest, str) and re.fullmatch(r"[0-9a-f]{64}", digest)
+        and type(size) is int and size > 0
+    ):
+        return None
+    return {
+        "schema_version": data["schema_version"],
+        "source_task_id": task, "source_loop_index": loop, "sha256": digest, "size_bytes": size,
+    }
 
 
 class QERunRegistryError(RuntimeError):
@@ -352,6 +404,7 @@ class QERunRegistry:
                 "qe_run_registration_missing",
                 f"single reservation {experiment_id} lacks registration summary",
             )
+        loop_index = prepared_workspace_loop_index(_mapping(custom_params)) or 1
         with self._transaction() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -360,8 +413,8 @@ class QERunRegistry:
                         (experiment_id, experiment_name, status,
                          factor_names, model_id, strategy_id,
                          data_split, custom_params, workspace_path,
-                         evolution_goal, llm_hypothesis, created_at)
-                    VALUES (%s, %s, 'created', %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                         evolution_goal, llm_hypothesis, loop_index, created_at)
+                    VALUES (%s, %s, 'created', %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
                     ON CONFLICT (experiment_id) DO UPDATE SET
                         experiment_name = EXCLUDED.experiment_name,
                         factor_names = EXCLUDED.factor_names,
@@ -370,6 +423,7 @@ class QERunRegistry:
                         data_split = EXCLUDED.data_split,
                         custom_params = EXCLUDED.custom_params,
                         evolution_goal = EXCLUDED.evolution_goal,
+                        loop_index = EXCLUDED.loop_index,
                         llm_hypothesis = EXCLUDED.llm_hypothesis
                     WHERE qe_experiments.status = 'created'
                     """,
@@ -384,6 +438,7 @@ class QERunRegistry:
                         workspace_path,
                         evolution_goal,
                         json.dumps(dict(llm_hypothesis)) if llm_hypothesis else None,
+                        loop_index,
                     ),
                 )
                 cur.execute(

@@ -12,6 +12,12 @@ from datetime import datetime, timezone
 from typing import Any, Mapping
 
 from backend.services.model_store.service import ModelStoreService
+from backend.services.quantevolver.qe_execution_reservation import PREPARED_WORKSPACE_PARAM
+from backend.services.quantevolver.qe_run_registry import (
+    QE_ARCHIVE_REPLAY_SOURCE_PARAM,
+    normalize_archive_replay_source,
+    prepared_workspace_loop_index,
+)
 
 from .payload_extractor import ExtractedArchivePayload, QEArchivePayloadExtractor
 from .repository import QEArchiveRepository
@@ -335,6 +341,10 @@ class QEArchiveService:
         payload: Mapping[str, Any],
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         prepared = dict(payload)
+        config = prepared.get("config") or {}
+        flags = (config.get("runtime_flags") or {}) if isinstance(config, Mapping) else {}
+        if isinstance(flags, Mapping) and PREPARED_WORKSPACE_PARAM in flags:
+            return self._attach_prepared_workspace_assets(prepared, flags)
         existing_manifest = _find_prediction_store_manifest(prepared)
         if existing_manifest is not None:
             return prepared, {
@@ -375,6 +385,85 @@ class QEArchiveService:
             prepared["mlflow_artifact_uri"] = manifest.get("mlflow_artifact_uri") or manifest.get("uri")
         return prepared, resolution
 
+    def _attach_prepared_workspace_assets(
+        self, payload: dict[str, Any], flags: Mapping[str, Any],
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Keep replay recorder identity separate from the verified training producer."""
+        task, loop_id = payload.get("task_id"), payload.get("loop_id")
+        loop = prepared_workspace_loop_index(flags, task_id=task, loop_id=loop_id)
+        mode = flags[PREPARED_WORKSPACE_PARAM]["workload"]
+        payload["loop_index"] = loop
+        for key in ("prediction_store_manifest", "mlflow_artifact_uri", "recorder_id", "recorder_experiment_id",
+                    "prediction_replay_lineage"):
+            payload.pop(key, None)
+
+        def exact_manifest(task_id, index, runner_mode):
+            if not task_id or not index:
+                return {}, {"status": "workspace_identity_missing", "errors": []}
+            try:
+                resolution = self._model_store_service.resolve_archive_manifest(
+                    run_id="", task_id=task_id, loop_index=index, verify_sha256=True,
+                )
+            except Exception as exc:  # Optional asset read never changes the completed account.
+                logger.warning("Prepared QE asset lookup failed for %s/Loop%s: %s", task_id, index, exc)
+                return {}, {"status": "failed", "errors": [str(exc)]}
+            manifest = resolution.get("manifest") or {}
+            metadata = manifest.get("metadata") or {}
+            if manifest and not (
+                metadata.get("task_id") == task_id
+                and _optional_int(metadata.get("loop_index")) == index
+                and metadata.get("mode") == runner_mode
+                and metadata.get("recorder_id") and metadata.get("recorder_experiment_id")
+            ):
+                return {}, {"status": "workspace_manifest_identity_mismatch", "errors": []}
+            return manifest, resolution
+
+        runner_mode = "pred_backtest" if mode == "PREDICTION_REPLAY" else "train_only"
+        account, resolution = exact_manifest(task, loop, runner_mode)
+        payload["prepared_workspace_asset_resolution"] = resolution["status"]
+        if not account:
+            return payload, resolution
+        account_meta = account["metadata"]
+        payload["recorder_id"] = account_meta["recorder_id"]
+        payload["recorder_experiment_id"] = account_meta["recorder_experiment_id"]
+        primary = account
+        if mode == "PREDICTION_REPLAY":
+            account_pred = _manifest_artifact(account, "prediction")
+            lineage: dict[str, Any] = {
+                "replay": {
+                    "task_id": task, "loop_index": loop,
+                    "recorder_id": account_meta["recorder_id"],
+                    "recorder_experiment_id": account_meta["recorder_experiment_id"],
+                    "artifact_uri": account.get("uri"), "prediction_sha256": account_pred.get("sha256"),
+                },
+                "producer_status": "not_declared",
+            }
+            ref = normalize_archive_replay_source(
+                payload.get("prediction_replay_source_ref") or flags.get(QE_ARCHIVE_REPLAY_SOURCE_PARAM)
+            )
+            if ref:
+                producer_task, producer_loop = ref["source_task_id"], ref["source_loop_index"]
+                source, source_resolution = exact_manifest(producer_task, producer_loop, "train_only")
+                source_pred = _manifest_artifact(source, "prediction")
+                weights = _manifest_artifact(source, "model_params")
+                if (account_pred.get("sha256") == ref["sha256"] == source_pred.get("sha256")
+                        and source_pred.get("size_bytes") == ref["size_bytes"] and weights.get("sha256")):
+                    primary = source
+                    resolution = source_resolution
+                    lineage.update(producer_status="verified", producer={
+                        "task_id": producer_task, "loop_index": producer_loop,
+                        "recorder_id": source["metadata"]["recorder_id"],
+                        "recorder_experiment_id": source["metadata"]["recorder_experiment_id"],
+                        "artifact_uri": source.get("uri"), "prediction_sha256": ref["sha256"],
+                        "model_params_sha256": weights["sha256"],
+                    })
+                else:
+                    lineage["producer_status"] = "unverified"
+            payload["prediction_replay_lineage"] = lineage
+        payload["prediction_store_manifest"] = primary
+        payload["mlflow_artifact_uri"] = primary.get("mlflow_artifact_uri") or primary.get("uri")
+        return payload, resolution
+
     def _write(self, extracted: ExtractedArchivePayload) -> None:
         repo = self._repository
         run_id = repo.upsert_run(extracted.run)
@@ -412,6 +501,12 @@ class QEArchiveService:
                     RESOURCE_SCHEMA_REASON,
                     run_id,
                 )
+
+
+def _manifest_artifact(manifest: Mapping[str, Any], artifact_type: str) -> Mapping[str, Any]:
+    matches = [entry for entry in (manifest.get("artifacts") or [])
+               if isinstance(entry, Mapping) and entry.get("artifact_type") == artifact_type]
+    return matches[0] if len(matches) == 1 else {}
 
 
 def _find_prediction_store_manifest(payload: Mapping[str, Any]) -> Mapping[str, Any] | None:

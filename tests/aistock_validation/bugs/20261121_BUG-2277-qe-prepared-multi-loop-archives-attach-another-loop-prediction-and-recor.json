@@ -200,11 +200,18 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qe-archive/health",
+    "fresh_process_evidence": [
+      "Fresh tracked source resolved the three graph tasks against the original Prediction Store and the signed native completion/consumption references. All 16 exact history rows were repaired and read back in an isolated transaction on existing DEV. Experimental and Archive IDs, account metrics and curves stayed unchanged. DEV rollback was independently verified. Receipt tmp/handoff/qe-graph-mainline-next-15h-20261121/bug2277_dev_lineage.json SHA256 a33eadf07c4058a0cae451c6667b9825c5ae58faf00db057ebec2baa064816ee.",
+      "Fresh registry DEV transaction wrote Loop9 through QERunRegistry.reserve_single and rolled back; focused archive, prepared workspace, lifecycle and manual selection tests passed 67 cases."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "post_restart_note": "After the user reloads backend-main, verify runtime identity and read back the exact 16 BUG-2277 records. Compare Archive IDs, task ID and Loop, replay and producer recorder identities, and Prediction Store SHA256 against the repair receipt. Preserve historical payloads and all economics. No execution node changes or compute replay.",
+    "provisional": false,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
