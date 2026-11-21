@@ -15,6 +15,28 @@
   ],
   "created_at": "2026-11-21T17:27:54.928836Z",
   "description": "The sixth table raises locally before message submission, so the aggregate notification cannot be sent.",
+  "design_compliance": [
+    {
+      "evidence": "All six packages and full mobile rows preserved; desktop remains six separate package sheets. External recipient rendering remains explicitly untested.",
+      "item": 1,
+      "result": "PASS"
+    },
+    {
+      "evidence": "Existing snapshot integrity, provider URL, UTF-8 card budget and errors retained; never crop to top N or claim recipient success.",
+      "item": 2,
+      "result": "PASS"
+    },
+    {
+      "evidence": "Same daily one-message, recommendation-period return and UNKNOWN semantics; original five-or-fewer presentation unchanged.",
+      "item": 3,
+      "result": "PASS"
+    },
+    {
+      "evidence": "No new gate, RBAC, approval, service, scheduler or dataset.",
+      "item": 4,
+      "result": "PASS"
+    }
+  ],
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -26,12 +48,18 @@
   "evidence_uris": [],
   "expected": "Six enabled programs can render one complete bounded card and deliver once through the existing snapshot, spreadsheet and transport path.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261121_BUG-2278-advisory-aggregate-mobile-delivery-rejects-six-enabled-strategy-programs.json",
       "backend/services/advisory_forward/notification_presentation.py",
       "backend/tests/advisory_model_first/test_advisory_notification_presentation.py"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261121_BUG-2278-advisory-aggregate-mobile-delivery-rejects-six-enabled-strategy-programs.json",
+      "backend/services/advisory_forward/notification_presentation.py",
+      "backend/tests/advisory_model_first/test_advisory_notification_presentation.py"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/advisory_forward/notification_presentation.py",
@@ -90,6 +118,11 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pre_execution_scope_review": {
+    "provider_constraint": "https://open.feishu.cn/document/feishu-cards/feishu-card-cardkit/components/table",
+    "runtime_hold": "No service control during the replay. Source merge and runtime activation remain separate.",
+    "scope": "Presentation plus direct regressions only. Daily one message, complete stock and exit rows, same immutable snapshot and desktop worksheets. No transport configuration, dedupe, source inference, PIT, economics, database or service changes."
+  },
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -100,14 +133,63 @@
     "platform_api_backend",
     "advisory_modeling_backend"
   ],
+  "review_rounds": [
+    {
+      "evidence": "Reproduced sixth-package exception with two real presentation/delivery regressions before patch. Combined mode activates only above five nonempty tables; indexed full-name legend preserves package identity, repeated stocks, original rank, status and return cells.",
+      "result": "PASS",
+      "round": 1,
+      "type": "correctness"
+    },
+    {
+      "evidence": "51 final related tests passed: five/six boundary, full 162-row mobile coverage, eight desktop worksheets, empty groups, UNKNOWN/exit distinctions, size failure before send, retry sends once. Ruff, diff-check and nox l0 passed. Current-agent self review, not independent review.",
+      "result": "PASS",
+      "round": 2,
+      "type": "completeness_and_regression"
+    },
+    {
+      "evidence": {
+        "actual_external_messages": 0,
+        "at": "2026-11-21T17:32:27.587788+00:00",
+        "backend_control": false,
+        "card_bytes": 14520,
+        "complete_mobile_rows": 162,
+        "database_writes": 0,
+        "desktop_worksheets": 8,
+        "mock_transport_messages": 1,
+        "presentation": "advisory_feishu_mobile_full_tables_v3",
+        "programs": 6,
+        "recipient_rendering": "NOT_TESTED",
+        "result": "PASS",
+        "runtime_activation": "PENDING_USER_RESTART",
+        "schema": "advisory_six_package_fresh_process_v1",
+        "source_sha256": "064e02f0bbf34e7ba310546c6c3c1dea2b1cd457e36c496415bb59197cb47bcd",
+        "tables": 1
+      },
+      "result": "PASS",
+      "round": 3,
+      "type": "fresh_process_final_revision"
+    }
+  ],
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "backend_restart_required": true,
+    "business_smoke_contract_id": "object_liveness",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/forward/status",
+    "fresh_process_evidence": [
+      "{\"actual_external_messages\": 0, \"at\": \"2026-11-21T17:32:27.587788+00:00\", \"backend_control\": false, \"card_bytes\": 14520, \"complete_mobile_rows\": 162, \"database_writes\": 0, \"desktop_worksheets\": 8, \"mock_transport_messages\": 1, \"presentation\": \"advisory_feishu_mobile_full_tables_v3\", \"programs\": 6, \"recipient_rendering\": \"NOT_TESTED\", \"result\": \"PASS\", \"runtime_activation\": \"PENDING_USER_RESTART\", \"schema\": \"advisory_six_package_fresh_process_v1\", \"source_sha256\": \"064e02f0bbf34e7ba310546c6c3c1dea2b1cd457e36c496415bb59197cb47bcd\", \"tables\": 1}"
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
