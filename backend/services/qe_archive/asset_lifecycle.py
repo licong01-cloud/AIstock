@@ -519,12 +519,15 @@ def _registered_frozen_score_replay(
 
 
 def _frozen_score_sources(provenance: Mapping[str, Any]) -> bool:
+    arm = provenance.get("arm")
+    if arm in ("AF_G0_TCN", "AF_SELF_ONLY"):
+        return _nested_frozen_score_sources(provenance, include_tcn=arm == "AF_G0_TCN")
+
     if "gat_sources" in provenance:
         sources = provenance["gat_sources"]
         weights = (provenance.get("af_share"), provenance.get("gat_share"))
         # Some frozen producers recorded the research arm and its graph relation
         # separately. Recognize that pair without rewriting the archived identity.
-        arm = provenance.get("arm")
         graph_blend = arm == "blend" or (
             arm == "AF_PLUS_G0" and provenance.get("relation") == "industry_embedding_only"
         )
@@ -549,7 +552,6 @@ def _frozen_score_sources(provenance: Mapping[str, Any]) -> bool:
             seen.add(key)
         return True
     # The original AF/TCN controls and blends use the earlier source fields.
-    arm = provenance.get("arm")
     return bool(
         _nonempty_text(provenance.get("af_run_id"))
         and _sha256_text(provenance.get("af_score_sha256"))
@@ -557,6 +559,50 @@ def _frozen_score_sources(provenance: Mapping[str, Any]) -> bool:
         and (arm == "af" or (arm == "blend" and _nonempty_text(provenance.get("tcn_task_id"))
                             and _sha256_text(provenance.get("tcn_score_sha256"))))
     )
+
+
+def _nested_frozen_score_sources(provenance: Mapping[str, Any], *, include_tcn: bool) -> bool:
+    """Validate the recorded producer identities and mixing weights of the new score replays."""
+    sources = _mapping(provenance.get("sources"))
+    weights = _mapping(provenance.get("weights"))
+    af = _mapping(sources.get("af"))
+    if not (_nonempty_text(af.get("run_id")) and _sha256_text(af.get("sha256"))):
+        return False
+
+    if include_tcn:
+        tcn = _mapping(sources.get("tcn"))
+        if not (
+            sources.keys() == {"af", "g0", "tcn"}
+            and weights == {"AF": 0.75, "G0": 0.125, "TCN": 0.125}
+            and _nonempty_text(tcn.get("task"))
+            and _sha256_text(tcn.get("sha256"))
+        ):
+            return False
+        graph_leg, task_key, loop_key = "g0", "task_id", "loop_index"
+    else:
+        if sources.keys() != {"af", "self_only"} or weights != {"AF": 0.75, "SELF_ONLY": 0.25}:
+            return False
+        graph_leg, task_key, loop_key = "self_only", "task", "loop"
+
+    graph_sources = sources[graph_leg]
+    if not isinstance(graph_sources, list) or len(graph_sources) != 3:
+        return False
+    seen = set()
+    seeds = set()
+    for item in graph_sources:
+        source = _mapping(item)
+        task, loop = source.get(task_key), source.get(loop_key)
+        if not (_nonempty_text(task) and type(loop) is int and loop > 0 and _sha256_text(source.get("sha256"))):
+            return False
+        if (task, loop) in seen:
+            return False
+        seen.add((task, loop))
+        if include_tcn:
+            seed = source.get("seed")
+            if type(seed) is not int or seed < 0 or seed in seeds:
+                return False
+            seeds.add(seed)
+    return True
 
 
 def _nonempty_text(value: Any) -> bool:

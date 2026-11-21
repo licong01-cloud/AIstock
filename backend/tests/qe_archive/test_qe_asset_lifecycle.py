@@ -145,6 +145,61 @@ def test_frozen_graph_blend_requires_sources_and_keeps_exact_score_identity(arm,
     assert classify_qe_result(p).reason_code == "qe_lifecycle_identity_incomplete"
 
 
+def _nested_frozen_replay_payload(arm: str) -> dict:
+    p = _frozen_replay_payload()
+    provenance = p["config"]["runtime_flags"]["frozen_run_provenance"]
+    for key in ("af_run_id", "af_score_sha256", "contract_sha256"):
+        del provenance[key]
+    sources = {"af": {"run_id": "af-source", "sha256": "c" * 64}}
+    if arm == "AF_G0_TCN":
+        sources.update(
+            g0=[{"task_id": "original-gat", "loop_index": i, "seed": seed, "sha256": "d" * 64}
+                for i, seed in ((1, 123), (3, 314), (5, 2718))],
+            tcn={"task": "original-tcn", "sha256": "e" * 64},
+        )
+        weights = {"AF": .75, "G0": .125, "TCN": .125}
+    else:
+        sources["self_only"] = [{"task": "original-self-only", "loop": i, "sha256": "f" * 64}
+                                for i in (1, 2, 3)]
+        weights = {"AF": .75, "SELF_ONLY": .25}
+    provenance.update(arm=arm, sources=sources, weights=weights)
+    return p
+
+
+@pytest.mark.parametrize("arm", ["AF_G0_TCN", "AF_SELF_ONLY"])
+def test_nested_frozen_score_replays_keep_model_free_identity(arm) -> None:
+    payload = _nested_frozen_replay_payload(arm)
+    original = deepcopy(payload)
+    decision = classify_qe_result(payload)
+    assert decision.archive_eligible and decision.identity_complete
+    assert build_business_identity(payload)["model_type"] is None
+    assert payload == original
+    changed = deepcopy(payload)
+    changed["config"]["runtime_flags"]["frozen_run_provenance"]["sources"]["af"]["sha256"] = "0" * 64
+    assert classify_qe_result(changed).business_identity_sha256 != decision.business_identity_sha256
+
+
+@pytest.mark.parametrize(("arm", "path", "value"), [
+    ("AF_G0_TCN", ("sources", "af", "run_id"), ""),
+    ("AF_G0_TCN", ("sources", "tcn", "sha256"), "invalid"),
+    ("AF_G0_TCN", ("sources", "g0", 0, "seed"), 314),
+    ("AF_G0_TCN", ("weights", "G0"), .25),
+    ("AF_SELF_ONLY", ("sources", "self_only"), []),
+    ("AF_SELF_ONLY", ("sources", "self_only", 0, "loop"), True),
+    ("AF_SELF_ONLY", ("sources", "self_only", 0, "loop"), 2),
+    ("AF_SELF_ONLY", ("sources", "self_only", 0, "sha256"), None),
+    ("AF_SELF_ONLY", ("sources", "tcn"), {"task": "other", "sha256": "f" * 64}),
+    ("AF_SELF_ONLY", ("weights", "SELF_ONLY"), "0.25"),
+])
+def test_incomplete_nested_frozen_score_replay_stays_pending(arm, path, value) -> None:
+    payload = _nested_frozen_replay_payload(arm)
+    leaf = payload["config"]["runtime_flags"]["frozen_run_provenance"]
+    for key in path[:-1]:
+        leaf = leaf[key]
+    leaf[path[-1]] = value
+    assert classify_qe_result(payload).reason_code == "qe_lifecycle_identity_incomplete"
+
+
 class _Repo:
     def __init__(self, survivor: str | None = None) -> None:
         self.survivor = survivor
