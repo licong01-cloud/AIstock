@@ -30,12 +30,18 @@
   ],
   "expected": "Allow verified completed-day native LocalSIM file replay to run the existing historical TWAP and end-of-day persistence contract, preserving the source-day pin, stored selection evidence and realtime submit gates.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/simulation_runtime/lifecycle.py",
+      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+      "tests/aistock_validation/bugs/20261121_BUG-2274-localsim.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/simulation_runtime/lifecycle.py",
-      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py"
+      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+      "tests/aistock_validation/bugs/20261121_BUG-2274-localsim.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/simulation_runtime/lifecycle.py",
@@ -116,11 +122,15 @@
       "The exact existing day, run, evidence and plan IDs were copied into transactions in the existing DEV PostgreSQL database. The production historical lifecycle executor persisted 58 UPDATED3 and 61 OLD5 fills and one reconciled closing NAV per account on 2026-01-05. Exact retry did not change row or fill counts. DEV rollback was independently verified and production remained read-only. Receipt SHA256 dce547ed33e5087498e31629418d521a4fdad2423bf47071541e30c2821fab60."
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
