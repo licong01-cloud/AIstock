@@ -41,7 +41,6 @@
   "expected": "新批次按实际模型计算需求选择rdagent-node1或wsl2-5080，纯预测回放无需GPU，未知模型阻断，保留既有更严格容量与冻结绑定",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261026_BUG-2096-qe-cpu-gpu.json",
       "backend/routers/quantevolver_evolution.py",
       "backend/services/quantevolver/qe_active_execution_capacity.py",
       "backend/services/quantevolver/qe_batch_execution_policy.py",
@@ -49,11 +48,11 @@
       "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
       "backend/tests/quantevolver/test_qe_batch_execution_policy.py",
       "backend/tests/unified_engine/test_custom_evo_mutation_routes.py",
-      "scripts/aistock_runtime_semantics.py"
+      "scripts/aistock_runtime_semantics.py",
+      "tests/aistock_validation/bugs/20261026_BUG-2096-qe-cpu-gpu.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261026_BUG-2096-qe-cpu-gpu.json",
       "backend/routers/quantevolver_evolution.py",
       "backend/services/quantevolver/qe_active_execution_capacity.py",
       "backend/services/quantevolver/qe_batch_execution_policy.py",
@@ -61,7 +60,8 @@
       "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
       "backend/tests/quantevolver/test_qe_batch_execution_policy.py",
       "backend/tests/unified_engine/test_custom_evo_mutation_routes.py",
-      "scripts/aistock_runtime_semantics.py"
+      "scripts/aistock_runtime_semantics.py",
+      "tests/aistock_validation/bugs/20261026_BUG-2096-qe-cpu-gpu.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -195,8 +195,8 @@
   },
   "first_seen_at": "2026-10-26T11:04:56.490783Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "8dc2606733067115d026220fc37533e8e284e1b2",
+  "fixed_at": "2026-10-26T11:29:46Z",
   "github_issue_number": 6727,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6727",
   "implementation_notes": [
@@ -209,6 +209,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6728",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -234,6 +235,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -245,7 +247,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2096",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "d8e24d505aadf47a",
+    "recorded_at": "2026-10-26T11:30:39.238191Z",
+    "runtime_contract_digest": "871cf48733f170d661c0e4a1ff63882c135296af190f42b77ede1b462a7f1f4d",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "243cf056241678c28d9274c1cfb7d52fa4dc7c17",
+    "source_merge_commit": "8dc2606733067115d026220fc37533e8e284e1b2",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6728",
+    "validation_evidence": [
+      "validation-receipt: id=614335c0b9c87731 commit=243cf056241678c28d9274c1cfb7d52fa4dc7c17 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+      "validation-receipt: id=a05ad585a4b050e7 commit=243cf056241678c28d9274c1cfb7d52fa4dc7c17 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/quantevolver/test_qe_batch_execution_policy.py backend/tests/multi_alpha/test_qe_submission_coordinator.py backend/tests/unified_engine/test_custom_evo_mutation_routes.py backend/tests/unified_engine/test_qe_node_execution.py backend/tests/unified_engine/test_qe_custom_evo_mutation_service.py backend/tests/unified_engine/test_qe_evolution_scheduler.py backend/tests/unified_engine/test_qe_prediction_replay.py -q --disable-warnings --maxfail=2` result=`144 passed`"
+    ],
+    "validation_evidence_digest": "44e647b9d9fbf3db0a05d31e0796e2ac58c53fcb4bda25ae9083f90c766e7187"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -254,6 +278,10 @@
     "fingerprint": "c5d3ffb38d44a9c494d2c344",
     "source_event_id": "FE-20261026-c5d3ffb38d44"
   },
+  "validation_evidence": [
+    "validation-receipt: id=614335c0b9c87731 commit=243cf056241678c28d9274c1cfb7d52fa4dc7c17 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+    "validation-receipt: id=a05ad585a4b050e7 commit=243cf056241678c28d9274c1cfb7d52fa4dc7c17 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/quantevolver/test_qe_batch_execution_policy.py backend/tests/multi_alpha/test_qe_submission_coordinator.py backend/tests/unified_engine/test_custom_evo_mutation_routes.py backend/tests/unified_engine/test_qe_node_execution.py backend/tests/unified_engine/test_qe_custom_evo_mutation_service.py backend/tests/unified_engine/test_qe_evolution_scheduler.py backend/tests/unified_engine/test_qe_prediction_replay.py -q --disable-warnings --maxfail=2` result=`144 passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
