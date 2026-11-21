@@ -6,6 +6,7 @@ Native package preparation owns those contracts; the node runs the existing CLI.
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import date
@@ -14,6 +15,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+from threading import Lock
 import time
 from typing import Any
 from uuid import uuid4
@@ -61,6 +63,14 @@ class LocalSimInferenceScope:
     stage: str = "native_policy_preparation"
     source_plan: dict | None = None
     source_plan_inputs: list[dict] = field(default_factory=list)
+    file_prefetch_owner: str | None = None
+
+
+@dataclass(frozen=True)
+class _PrefetchedFileDay:
+    index_path: Path
+    index_sha256: str
+    producer_workspaces: dict[str | None, str]
 
 
 LOCALSIM_INFERENCE_SCOPE: ContextVar[LocalSimInferenceScope | None] = ContextVar("localsim_inference_scope", default=None)
@@ -262,6 +272,10 @@ class LocalSimReferencedAssetResolver(QEExperimentRuntimeAssetResolver):
                             "model_source_path": str(weight), "asset_addressing": "READ_ONLY_REFERENCE"},
             "native_package_identity": context,
             "canonical_pit_runtime_lease": lease.as_dict() if lease else None,
+            **({"prefetch_uses_plan_pit": True}
+               if own_scope().file_prefetch_owner and lease is not None and pit_identity is not None
+               and artifact_config.get("pit_identity") is None
+               and context["pit_identity"] is None else {}),
             **({"pit_identity": pit_identity} if pit_identity is not None else {}),
             **({"observation_panel": observation_panel} if observation_panel is not None else {}),
         })
@@ -335,6 +349,8 @@ class LocalSimSharedInferenceProvider(WslStrategyPackageInferenceProvider):
     def __init__(self, *, performance_reference: bool = False, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.performance_reference = performance_reference
+        self._prefetched_file_days: OrderedDict[tuple[str, date], _PrefetchedFileDay] = OrderedDict()
+        self._prefetched_file_days_lock = Lock()
 
     def require_frozen_file_input_identity(self):
         from .localsim_file_inputs import current_file_dataset
@@ -364,7 +380,65 @@ class LocalSimSharedInferenceProvider(WslStrategyPackageInferenceProvider):
             raise ValueError("LocalSIM seed batching requires an owned historical plan and distinct seed IDs")
         return self._run_workspaces(workspaces, trade_date=trade_date, cutoff_date=cutoff_date)
 
+    def _file_prefetch_key(self, scope, dataset, workspaces) -> str | None:
+        if self.performance_reference or scope.file_prefetch_owner is None or dataset is None:
+            return None
+        manifests = {seed: json.loads(ws.manifest_path.read_text(encoding="utf-8")) for seed, ws in workspaces.items()}
+        if any(manifest.get("prefetch_uses_plan_pit") is not True for manifest in manifests.values()):
+            return None
+        identities = []
+        for seed, ws in workspaces.items():
+            manifest = manifests[seed]
+            manifest.pop("pit_identity")  # Rendered separately from the frozen plan for each cutoff.
+            workspace = ws.workspace_path
+            path_prefix = win_to_wsl_path(str(workspace)).encode("utf-8")
+            member_hashes = {}
+            for path in [ws.factor_order_path, *workspace.rglob("*.py")]:
+                contents = path.read_bytes()
+                if path == ws.factor_entry_path:
+                    contents = contents.replace(path_prefix, b"<workspace>")
+                member_hashes[path.relative_to(workspace).as_posix()] = hashlib.sha256(contents).hexdigest()
+            blobs = [p.stat() for p in (ws.model_params_path, ws.dataset_processor_path) if p is not None]
+            identities.append([seed, manifest, member_hashes,
+                               [[s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns] for s in blobs]])
+        return canonical_json_sha256({"plan": scope.source_plan["plan_hash"], "file": dataset.identity,
+                                     "owner": scope.file_prefetch_owner, "workspaces": identities})
+
+    @staticmethod
+    def _next_file_request(scope, dataset, workspaces):
+        from backend.services.advisory_historical_range import input_source_plan as source_plans
+
+        days = scope.source_plan["days"]
+        ordinal = next(i for i, row in enumerate(days) if row["decision_date"] == str(scope.clocks.decision_date))
+        if ordinal + 1 == len(days):
+            return None
+        row = days[ordinal + 1]
+        clocks = SelectionSignalDayV1(*(date.fromisoformat(row[k]) for k in ("decision_date", "data_cutoff", "target_trade_date")))
+        route = source_plans.resolve_day_source(scope.source_plan, clocks)
+        if (route["source"] != "DATASET_FILES" or route["file_binding_hash"] != dataset.identity
+                or route.get("pit_policy") is None):
+            return None
+        for ws in workspaces.values():
+            manifest = json.loads(ws.manifest_path.read_text(encoding="utf-8"))
+            lease = SelectionPitRuntimeLease.from_mapping(manifest["canonical_pit_runtime_lease"])
+            if not all(lease.coverage_start <= day <= lease.coverage_end
+                       for day in (clocks.decision_date, clocks.data_cutoff, clocks.target_trade_date)):
+                return None
+        session = source_plans.create_input_session(scope.source_plan, clocks, consumer_scope="LOCALSIM",
+            run_id=scope.source_plan["run_id"], max_bytes=0, root_override=dataset.root)
+        try:
+            pit = source_plans.session_pit_identity(session, request_identity=None, manifest_identity=None)
+        finally:
+            session.close()
+        if pit is None:
+            raise ValueError("LocalSIM file prefetch requires daily frozen PIT membership")
+        return clocks, pit
+
     def _run_workspaces(self, workspaces, *, trade_date: date, cutoff_date: date | None):
+        from backend.data_service.frozen_dataset import FrozenDatasetError
+        from backend.services.advisory_historical_range.input_source_plan import SourcePlanError
+        from .localsim_file_inputs import current_file_dataset
+
         scope = own_scope()
         if any(not Path(workspace.workspace_path).resolve().is_relative_to(scope.root.resolve())
                for workspace in workspaces.values()):
@@ -377,14 +451,46 @@ class LocalSimSharedInferenceProvider(WslStrategyPackageInferenceProvider):
         # The native selection service resolves PREVIOUS_TRADING_DAY_CLOSE
         # after entering this scope; do not reconstruct that calendar policy.
         scope.clocks, scope.clocks_bound = clocks, True
+        dataset = current_file_dataset()
+        prefetch_key = self._file_prefetch_key(scope, dataset, workspaces)
+        if prefetch_key is not None:
+            with self._prefetched_file_days_lock:
+                cached = self._prefetched_file_days.get((prefetch_key, trade_date))
+            if cached is not None:
+                # Match the shared CLI's frozen checkpoint verification. The
+                # new daily object's pins include files opened by the node on
+                # the prior day but not yet opened in this Windows scope.
+                for component in dataset.binding["files"]:
+                    dataset.file(component)
+                dataset.assert_unchanged()
+                data = cached.index_path.read_bytes()
+                if hashlib.sha256(data).hexdigest() != cached.index_sha256:
+                    raise ValueError("LocalSIM prefetched node index content changed")
+                return self._consume_node_day(scope, json.loads(data), cached.index_path, workspaces, dataset,
+                                              producer_workspaces=cached.producer_workspaces)
+        following, preflight_error = None, None
+        if prefetch_key is not None:
+            try:
+                following = self._next_file_request(scope, dataset, workspaces)
+            except (FrozenDatasetError, SourcePlanError) as exc:
+                # A future day's missing source must not prevent inference for
+                # the current day. The future day will prepare its own input.
+                preflight_error = {"stage": "prefetch_following_input", "reason_code": exc.reason_code}
         root = scope.root / "node" / uuid4().hex
         root.mkdir(parents=True)
         plan, output = root / "plan.json", root / "batch.json"
-        _atomic_json(plan, [
+        requests = [
             {**clocks.to_dict(), **({"request_id": seed, "runtime_workspace": win_to_wsl_path(str(workspace.workspace_path))}
                                    if seed is not None else {})}
             for seed, workspace in workspaces.items()
-        ])
+        ]
+        if following is not None:
+            future_clocks, future_pit = following
+            requests.extend({**future_clocks.to_dict(), "pit_identity": future_pit,
+                             "runtime_workspace": win_to_wsl_path(str(workspace.workspace_path)),
+                             **({"request_id": seed} if seed is not None else {})}
+                            for seed, workspace in workspaces.items())
+        _atomic_json(plan, requests)
         # Actual bidirectional path verification, rather than assuming /mnt/x.
         witness = root / "path-witness.txt"
         witness.write_text(scope.run_id, encoding="utf-8")
@@ -392,8 +498,6 @@ class LocalSimSharedInferenceProvider(WslStrategyPackageInferenceProvider):
         arguments = ["scripts/strategy_package_live_inference.py", "--runtime-workspace", win_to_wsl_path(str(first.workspace_path)),
                      "--historical-plan", win_to_wsl_path(str(plan)), "--historical-read-only", "--consumer-scope", "LOCALSIM",
                      "--run-id", scope.run_id, "--temp-root", win_to_wsl_path(str(root)), "--output-path", win_to_wsl_path(str(output))]
-        from .localsim_file_inputs import current_file_dataset
-        dataset = current_file_dataset()
         node_run_id = scope.run_id
         if scope.source_plan is not None:
             node_run_id = scope.source_plan["run_id"]
@@ -438,22 +542,59 @@ class LocalSimSharedInferenceProvider(WslStrategyPackageInferenceProvider):
         if not output.is_file():
             raise DataUnavailableError("LocalSIM node did not publish its own index", context={
                 "reason_code": "LOCALSIM_NODE_INDEX_MISSING", "returncode": completed.returncode, "run_id": scope.run_id})
-        index = json.loads(output.read_text(encoding="utf-8"))
+        index_bytes = output.read_bytes()
+        index = json.loads(index_bytes)
+        index_results = index.get("results", [])
+        if following is not None:
+            requested = [(request["decision_date"], request.get("request_id")) for request in requests]
+            indexed = [(item.get("trade_date"), item.get("request_id")) for item in index_results]
+            if indexed != requested[:len(indexed)]:
+                raise ValueError("LocalSIM file batch index is not an ordered prefix of its plan")
+        complete = (index.get("status") == "COMPLETE" and index.get("ok") is True
+                    and completed.returncode == 0 and len(index_results) == len(requests))
+        complete_prefix = (following is not None and index.get("status") == "FAILED"
+                           and index.get("ok") is False and completed.returncode != 0
+                           and index.get("failed_stage") == "raw_inference"
+                           and index.get("failed_clocks") == following[0].to_dict()
+                           and len(workspaces) <= len(index_results) < len(requests))
         if (index.get("consumer_scope") != "LOCALSIM" or index.get("run_id") != node_run_id
-                or index.get("status") != "COMPLETE" or index.get("ok") is not True or completed.returncode != 0
-                or len(index.get("results", [])) != len(workspaces)):
+                or not (complete or complete_prefix)):
             raise DataUnavailableError("LocalSIM node computation failed", context={
                 "reason_code": index.get("reason_code", "LOCALSIM_NODE_FAILED"), "failed_stage": index.get("failed_stage"),
                 "failed_clocks": index.get("failed_clocks"), "failed_request_id": index.get("failed_request_id"),
                 "completed_prefix": index.get("results", []), "run_id": scope.run_id})
-        wall_seconds = time.perf_counter() - started
+        if following is not None:
+            dataset.assert_unchanged()
+        results = self._consume_node_day(scope, index, output, workspaces, dataset,
+                                         wall_seconds=time.perf_counter() - started, preflight_error=preflight_error)
+        if following is not None and complete:
+            addresses = {seed: win_to_wsl_path(str(ws.workspace_path)) for seed, ws in workspaces.items()}
+            with self._prefetched_file_days_lock:
+                self._prefetched_file_days[(prefetch_key, following[0].decision_date)] = _PrefetchedFileDay(
+                    output, hashlib.sha256(index_bytes).hexdigest(), addresses)
+                if len(self._prefetched_file_days) > 32:
+                    self._prefetched_file_days.popitem(last=False)
+        return results
+
+    def _consume_node_day(self, scope, index, output, workspaces, dataset, *, producer_workspaces=None,
+                          wall_seconds=None, preflight_error=None):
+        clocks = scope.clocks
+        node_run_id = scope.source_plan["run_id"] if scope.source_plan is not None else scope.run_id
+        if index.get("consumer_scope") != "LOCALSIM" or index.get("run_id") != node_run_id:
+            raise ValueError("LocalSIM node index consumer/run identity mismatch")
+        items = [item for item in index["results"] if item.get("trade_date", str(clocks.decision_date)) == str(clocks.decision_date)]
+        if len(items) != len(workspaces):
+            raise ValueError("LocalSIM node did not complete this day's seed roster")
         return {
             seed: self._read_node_result(scope=scope, index=index, item=item, output=output, node_run_id=node_run_id,
-                seed=seed, workspace=workspace, clocks=clocks, dataset=dataset, wall_seconds=wall_seconds)
-            for (seed, workspace), item in zip(workspaces.items(), index["results"], strict=True)
+                seed=seed, workspace=workspace, clocks=clocks, dataset=dataset, wall_seconds=wall_seconds,
+                producer_workspace=producer_workspaces[seed] if producer_workspaces is not None else None,
+                preflight_error=preflight_error)
+            for (seed, workspace), item in zip(workspaces.items(), items, strict=True)
         }
 
-    def _read_node_result(self, *, scope, index, item, output, node_run_id, seed, workspace, clocks, dataset, wall_seconds):
+    def _read_node_result(self, *, scope, index, item, output, node_run_id, seed, workspace, clocks, dataset, wall_seconds,
+                          producer_workspace, preflight_error):
         directory = output.parent / "batch_dates" / clocks.decision_date.isoformat()
         if seed is not None:
             directory /= hashlib.sha256(seed.encode("utf-8")).hexdigest()
@@ -469,7 +610,8 @@ class LocalSimSharedInferenceProvider(WslStrategyPackageInferenceProvider):
                 or metadata.get("run_id") != node_run_id or metadata.get("clocks") != clocks.to_dict()
                 or metadata.get("binding") != index.get("binding") or metadata.get("request_id") != seed):
             raise ValueError("LocalSIM node consumer/run/clock binding mismatch")
-        if seed is not None and metadata.get("runtime_workspace") != win_to_wsl_path(str(workspace.workspace_path)):
+        if (seed is not None or producer_workspace is not None) and metadata.get("runtime_workspace") != (
+                producer_workspace or win_to_wsl_path(str(workspace.workspace_path))):
             raise ValueError("LocalSIM node output belongs to a different seed workspace")
         native_manifest = json.loads(workspace.manifest_path.read_text(encoding="utf-8"))
         if scope.source_plan is not None:
@@ -493,12 +635,22 @@ class LocalSimSharedInferenceProvider(WslStrategyPackageInferenceProvider):
         elif native_manifest.get("canonical_pit_runtime_lease") is not None:
             _require_native_pit_receipt(payload, native_manifest["canonical_pit_runtime_lease"], clocks,
                                         file_binding_hash=dataset.identity if dataset is not None else None)
-        duration = {"inference_wall_seconds": wall_seconds} if seed is None else {"inference_batch_wall_seconds": wall_seconds}
+        duration = ({"inference_file_prefetch_hit": True} if producer_workspace is not None
+                    else {"inference_wall_seconds" if seed is None else "inference_batch_wall_seconds": wall_seconds})
         metadata.update(inference_backend="wsl", **duration,
                         inference_batch_index=str(output), wsl_distro=self.distro, wsl_conda_env=self.conda_env)
+        if preflight_error is not None:
+            metadata["prefetch_following_failure"] = preflight_error
+        elif index.get("status") == "FAILED":
+            metadata["prefetch_following_failure"] = {
+                "reason_code": index.get("reason_code"), "clocks": index.get("failed_clocks"),
+            }
         scope.source_universes.append({"members": metadata.get("universe_members"), "count": payload["universe_count"],
                                        "input_hash": payload["input_context"].get("universe_input_hash")})
         scope.completed_prefix.append({"stage": "shared_raw_inference", "clocks": clocks.to_dict(), "output_sha256": item["sha256"],
-                                       **({"request_id": seed} if seed is not None else {})})
+                                       **({"request_id": seed} if seed is not None else {}),
+                                       **({"file_prefetch_hit": True} if producer_workspace is not None else {}),
+                                       **({"prefetch_following_failure": metadata["prefetch_following_failure"]}
+                                          if "prefetch_following_failure" in metadata else {})})
         return LiveInferenceResult(scores=payload["scores"], metadata=metadata, universe_count=payload["universe_count"],
                                    source_read_receipts=payload["source_read_receipts"], input_context=payload["input_context"])
