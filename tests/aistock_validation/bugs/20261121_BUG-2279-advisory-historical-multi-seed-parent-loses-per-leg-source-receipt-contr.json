@@ -129,17 +129,25 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "{\"at\": \"2026-11-21T18:36:54.395842+00:00\", \"backend_control\": false, \"checked_package_days\": [{\"components\": 2, \"date\": \"2026-01-05\", \"original_seed_proofs\": 6, \"package_id\": \"pkg_ma_967f41f3977e35d56ed400be\"}, {\"components\": 2, \"date\": \"2026-01-06\", \"original_seed_proofs\": 6, \"package_id\": \"pkg_ma_967f41f3977e35d56ed400be\"}, {\"components\": 2, \"date\": \"2026-01-05\", \"original_seed_proofs\": 10, \"package_id\": \"pkg_ma_38e37d0dde886da98e838097\"}, {\"components\": 2, \"date\": \"2026-01-06\", \"original_seed_proofs\": 10, \"package_id\": \"pkg_ma_38e37d0dde886da98e838097\"}], \"database_writes\": 0, \"date_plan_file_sha256\": \"86860f3057e9a5e88dc864f90b0da0c21eb2972d569234d4bc1ffb59e6fcd893\", \"external_messages\": 0, \"interpretation\": \"Captured native input evidence passes unchanged real task validator; runtime acceptance still pending.\", \"native_file_hash_set_sha256\": \"51c4fe6ca86fd779716e7f480cb3934739dee46f57d341d29d5f6f6dd6792406\", \"new_model_fits\": 0, \"new_predictions\": 0, \"original_native_files\": 32, \"production_lists_committed\": 0, \"result\": \"PASS\", \"schema\": \"advisory_native_multi_seed_input_fresh_process_v1\", \"source_sha256\": \"e775ca4c06fe004216b945773e2a12b92a9c82bfdb794b656df7a811d604f66d\"}"
+    ],
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
     "target_ids": [
       "backend-main"
-    ]
+    ],
+    "backend_restart_required": true,
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/historical-range-options",
+    "business_smoke_contract_id": "object_liveness"
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
@@ -263,5 +271,93 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
-  }
+  },
+  "pre_execution_scope_review": {
+    "scope": "Only shared parent component evidence serialization and direct regressions. Existing shared four-role validator unchanged. Preserve every original seed context/receipt, require exact native seals and equal actually consumed input sets before canonical component binding. No score, rank, weights, date, PIT, model, processor, query, source partition or cost changes.",
+    "frozen_replay_compatibility": "The changed shared evidence adapter is outside the frozen R5/native inference file closure. Preserve original request, PIT and source plan; do not rewrite or synthesize native score files. Runtime retry must use the existing native resume API and original input guards. No silent new binding, source substitution or manual evidence bypass.",
+    "runtime": "Both pilot runs FAILED after native scoring, zero lists. No active owned inference remains. Combine BUG-2278 and BUG-2279 in one later user-owned backend restart."
+  },
+  "review_rounds": [
+    {
+      "round": 1,
+      "type": "correctness",
+      "result": "PASS",
+      "evidence": "Reproduced 8-versus-4 receipt failure with real native parent execution fixture; live legacy keeps 8 original reads. Fix checks every native four-role seal, refuses missing/changed seed proof, retains all originals, and rebinds the aggregate context. No inference or database verification added."
+    },
+    {
+      "round": 2,
+      "type": "completeness_and_regression",
+      "result": "PASS",
+      "evidence": "Final complete five-file related matrix: 73 passed on owned X temp after four failed placement cases first passed individually. Ruff, diff-check and nox l0 passed. Covers 3/5 seeds, full public parent artifact, legacy/nonplanned and single-seed compatibility, missing/tampered/partition/version evidence, unchanged four-role rejection. Current-agent self review, not independent review."
+    },
+    {
+      "round": 3,
+      "type": "fresh_process_real_captured_inputs",
+      "result": "PASS",
+      "evidence": {
+        "schema": "advisory_native_multi_seed_input_fresh_process_v1",
+        "at": "2026-11-21T18:36:54.395842+00:00",
+        "source_sha256": "e775ca4c06fe004216b945773e2a12b92a9c82bfdb794b656df7a811d604f66d",
+        "result": "PASS",
+        "checked_package_days": [
+          {
+            "package_id": "pkg_ma_967f41f3977e35d56ed400be",
+            "date": "2026-01-05",
+            "components": 2,
+            "original_seed_proofs": 6
+          },
+          {
+            "package_id": "pkg_ma_967f41f3977e35d56ed400be",
+            "date": "2026-01-06",
+            "components": 2,
+            "original_seed_proofs": 6
+          },
+          {
+            "package_id": "pkg_ma_38e37d0dde886da98e838097",
+            "date": "2026-01-05",
+            "components": 2,
+            "original_seed_proofs": 10
+          },
+          {
+            "package_id": "pkg_ma_38e37d0dde886da98e838097",
+            "date": "2026-01-06",
+            "components": 2,
+            "original_seed_proofs": 10
+          }
+        ],
+        "original_native_files": 32,
+        "date_plan_file_sha256": "86860f3057e9a5e88dc864f90b0da0c21eb2972d569234d4bc1ffb59e6fcd893",
+        "new_model_fits": 0,
+        "new_predictions": 0,
+        "database_writes": 0,
+        "external_messages": 0,
+        "backend_control": false,
+        "production_lists_committed": 0,
+        "interpretation": "Captured native input evidence passes unchanged real task validator; runtime acceptance still pending.",
+        "native_file_hash_set_sha256": "51c4fe6ca86fd779716e7f480cb3934739dee46f57d341d29d5f6f6dd6792406"
+      }
+    }
+  ],
+  "design_compliance": [
+    {
+      "item": 1,
+      "result": "PASS",
+      "evidence": "All original per-seed proofs retained; real frozen program/date-plan artifacts and 32 original native files pass unchanged task validator for four package-days. Runtime list acceptance remains pending."
+    },
+    {
+      "item": 2,
+      "result": "PASS",
+      "evidence": "Missing, tampered, mixed or changed inputs fail closed; all original native file hashes unchanged. No publication success claimed from offline proof."
+    },
+    {
+      "item": 3,
+      "result": "PASS",
+      "evidence": "Scores and original ensemble/selection code unchanged; normalize evidence only for explicit planned multi-seed inputs. Single seed and non-planned behavior retained."
+    },
+    {
+      "item": 4,
+      "result": "PASS",
+      "evidence": "No new approval, gate, RBAC, qualification, scheduler, service or dataset. No training, QE, DDL or manual sends."
+    }
+  ]
 }
