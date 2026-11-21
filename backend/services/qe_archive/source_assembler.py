@@ -12,6 +12,11 @@ from datetime import date, datetime
 from typing import Any
 
 from backend.db.pg_pool import get_conn
+from backend.services.quantevolver.qe_run_registry import (
+    QE_ARCHIVE_REPLAY_SOURCE_PARAM,
+    normalize_archive_replay_source,
+    prepared_workspace_loop_index,
+)
 from backend.services.quantevolver.runtime_contract import (
     QE_MINUTE_RUNTIME_CONTRACT_VERSION,
     merge_qe_minute_runtime_contract,
@@ -1111,6 +1116,12 @@ class QEArchiveSourceAssembler:
         )
         data_split = _ensure_mapping(row.get("data_split"))
         factor_names = _ensure_list(row.get("factor_names"))
+        task_id = row.get("qe_task_id") or row.get("task_id")
+        loop_id = row.get("qe_loop_id")
+        workspace_index = prepared_workspace_loop_index(custom_params, task_id=task_id, loop_id=loop_id)
+        repaired_ref = normalize_archive_replay_source(
+            _ensure_mapping(row.get("result_files")).get(QE_ARCHIVE_REPLAY_SOURCE_PARAM)
+        )
         freq = _infer_freq(custom_params, _ensure_mapping(row.get("result_files")))
         limit_suspend_authoritative = _infer_limit_suspend_authoritative(custom_params)
 
@@ -1162,9 +1173,10 @@ class QEArchiveSourceAssembler:
             "source_sub_id": row.get("qe_loop_id"),
             "logical_experiment_id": row.get("experiment_id"),
             "experiment_id": row.get("experiment_id"),
-            "task_id": row.get("qe_task_id") or row.get("task_id"),
-            "loop_id": row.get("qe_loop_id"),
-            "loop_index": row.get("loop_index"),
+            "task_id": task_id,
+            "loop_id": loop_id,
+            "loop_index": workspace_index if workspace_index is not None else row.get("loop_index"),
+            **({"prediction_replay_source_ref": repaired_ref} if repaired_ref and workspace_index else {}),
             "run_type": "evolution_loop" if row.get("is_evolution_loop") else "single_experiment",
             "status": row.get("status") or "completed",
             "model_type": row.get("model_id"),

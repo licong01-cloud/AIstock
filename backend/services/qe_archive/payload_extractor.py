@@ -328,6 +328,7 @@ class QEArchivePayloadExtractor:
                     "event_type": event_type,
                     "source_keys": sorted(str(k) for k in data.keys()),
                     "prediction_store": _source_prediction_store_metadata(prediction_store_manifest, artifact_manifest),
+                    "prediction_replay_lineage": data.get("prediction_replay_lineage"),
                 }
             ),
         )
@@ -1147,6 +1148,8 @@ def _extract_prediction_store_manifest(
     metrics: Mapping[str, Any],
     enhanced: Mapping[str, Any],
 ) -> dict[str, Any]:
+    if "prepared_workspace_asset_resolution" in data:
+        return _ensure_mapping(data.get("prediction_store_manifest"))
     sources = (
         data.get("prediction_store_manifest"),
         data.get("prediction_store"),
@@ -1213,9 +1216,11 @@ def _extract_artifact_manifest_items(
     enhanced: Mapping[str, Any],
 ) -> list[dict[str, Any]]:
     manifest = _extract_prediction_store_manifest(data, config, metrics, enhanced)
-    raw_items = _as_list(manifest.get("artifacts") or data.get("artifact_manifest") or config.get("artifact_manifest"))
+    raw_items = manifest.get("artifacts")
+    if "prepared_workspace_asset_resolution" not in data:
+        raw_items = raw_items or data.get("artifact_manifest") or config.get("artifact_manifest")
     records: list[dict[str, Any]] = []
-    for item in raw_items:
+    for item in _as_list(raw_items):
         if not isinstance(item, Mapping):
             continue
         artifact = _normalize_artifact_manifest_item(run_id, item)

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import pytest
 
+from backend.services.qe_archive.archive_service import QEArchiveService
 from backend.services.qe_archive.handlers.contract import HandlerStatus
 from backend.services.qe_archive.handlers.paper_v2_archive_handler import (
     PaperV2ArchiveHandler,
@@ -97,6 +98,92 @@ def test_archive_history_projection_does_not_relax_new_work_retirement_gate() ->
             source="new_executable_work_regression_guard",
             require_minute=True,
         )
+
+
+def _prepared_row(workload="PREDICTION_REPLAY", index=5):
+    return {
+        "experiment_id": "original-experiment", "qe_task_id": "graph-task", "qe_loop_id": f"Loop{index}",
+        "loop_index": 1, "status": "completed", "model_id": "GATS",
+        "result_metrics": {"n_trading_days": 565, "final_nav": 2.0},
+        "custom_params": {
+            "_qe_run_registration": {"schema_version": "qe_run_registration_v1", "run_kind": "single",
+                                     "task_id": "graph-task", "loop_index": index},
+            "_qe_prepared_workspace": {"task_id": "graph-task", "loop_id": f"Loop{index}", "workload": workload},
+        },
+    }
+
+
+def _store_manifest(index, mode, score="a" * 64):
+    uri = f"aistock-prediction-store://runs/graph-task_L{index}"
+    artifacts = [{"artifact_type": "prediction", "artifact_name": "pred.pkl",
+                  "uri": uri + "/prediction", "sha256": score, "size_bytes": 123}]
+    if mode == "train_only":
+        artifacts.append({"artifact_type": "model_params", "artifact_name": "params.pkl",
+                          "uri": uri + "/model_params", "sha256": "b" * 64, "size_bytes": 456})
+    return {
+        "uri": uri, "artifacts": artifacts,
+        "metadata": {"task_id": "graph-task", "loop_index": index, "mode": mode,
+                     "recorder_id": f"recorder{index}", "recorder_experiment_id": f"mlflow{index}"},
+    }
+
+
+@pytest.mark.parametrize("producer_score", ["a" * 64, "c" * 64])
+def test_prepared_archive_joins_account_recorder_and_verified_producer(producer_score):
+    row = _prepared_row()
+    row["result_files"] = {"_qe_archive_replay_source": {
+        "schema_version": "qe_prediction_replay_source_ref_v1",
+        "source_task_id": "graph-task", "source_loop_index": 2, "sha256": "a" * 64, "size_bytes": 123,
+    }}
+    payload = QEArchiveSourceAssembler.build_experiment_payload(row)
+    assert payload["loop_index"] == 5
+    # Replayed outbox payloads may still carry the old default and wrong manifest.
+    payload.update(loop_index=1, prediction_store_manifest=_store_manifest(1, "train_only"))
+
+    class Store:
+        def resolve_archive_manifest(self, *, run_id, task_id, loop_index, verify_sha256):
+            assert not run_id and task_id == "graph-task" and verify_sha256
+            if loop_index == 5:
+                manifest = _store_manifest(5, "pred_backtest")
+            elif loop_index == 2:
+                manifest = _store_manifest(2, "train_only", producer_score)
+            else:
+                raise AssertionError(f"Unexpected lookup at Loop{loop_index}")
+            return {"status": "available", "manifest": manifest, "artifact_count": len(manifest["artifacts"])}
+
+    result = QEArchiveService(repository=object(), model_store_service=Store()).process_payload(payload)
+    assert result.extracted.run.loop_index == 5
+    source = result.extracted.source
+    assert source.recorder_id == "recorder5"
+    assert source.metadata["prediction_replay_lineage"]["replay"]["loop_index"] == 5
+    if producer_score == "a" * 64:
+        assert source.mlflow_artifact_uri.endswith("_L2")
+        assert source.metadata["prediction_replay_lineage"]["producer"]["recorder_id"] == "recorder2"
+        assert any(a["artifact_type"] == "model_params" for a in result.extracted.artifact_manifest)
+    else:
+        assert source.mlflow_artifact_uri.endswith("_L5")
+        assert source.metadata["prediction_replay_lineage"]["producer_status"] == "unverified"
+        assert all(a["artifact_type"] != "model_params" for a in result.extracted.artifact_manifest)
+
+
+def test_prepared_archive_refuses_registered_loop_conflict_and_stale_artifact_fallback():
+    row = _prepared_row("TRAIN_ONLY", index=2)
+    row["qe_loop_id"] = "Loop1"
+    with pytest.raises(ValueError, match="QE_PREPARED_ARCHIVE_WORKSPACE_IDENTITY_MISMATCH"):
+        QEArchiveSourceAssembler.build_experiment_payload(row)
+    row["qe_loop_id"] = "Loop2"
+    payload = QEArchiveSourceAssembler.build_experiment_payload(row)
+    payload["artifact_manifest"] = _store_manifest(1, "train_only")["artifacts"]
+
+    class WrongStore:
+        def resolve_archive_manifest(self, *, run_id, task_id, loop_index, verify_sha256):
+            assert not run_id and task_id == "graph-task" and loop_index == 2 and verify_sha256
+            return {"status": "available", "manifest": _store_manifest(1, "train_only")}
+
+    result = QEArchiveService(repository=object(), model_store_service=WrongStore()).process_payload(payload)
+    assert result.extracted.run.loop_index == 2
+    assert result.extracted.source.recorder_id is None
+    assert not result.extracted.artifact_manifest
+    assert result.stats["prediction_store_link"]["status"] == "workspace_manifest_identity_mismatch"
 
 
 # ---------------------------------------------------------------------------

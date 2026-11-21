@@ -107,14 +107,17 @@ def test_prepared_workspace_keeps_same_worker_and_registration_on_resume(monkeyp
 
     async def build(_):
         return QEWorkspaceSubmissionPayload(
-            "prepared", 1, {"workload_mode": "PREDICTION_REPLAY", "model_params": {
+            "prepared", 4, {"workload_mode": "PREDICTION_REPLAY", "model_params": {
                 "_qe_active_dataset_summary": {"dataset_manifest_sha256": "b" * 64},
                 "_qe_direct_v2_dataset_binding": {"candidate_root": "/data/release"},
-            }}, {"conf.yaml": "frozen"}, "qrun --pred-backtest prediction.pkl",
+            }}, {"conf.yaml": "frozen", "qe_prediction_replay_source_ref.json":
+                '{"schema_version":"qe_prediction_replay_source_ref_v1","source_task_id":"prepared",'
+                '"source_loop_index":2,"sha256":"' + "d" * 64 + '","size_bytes":123}'
+            }, "qrun --pred-backtest prediction.pkl",
             execution_environment_snapshot_id="node_snap", execution_environment_manifest_sha256="c" * 64,
         )
 
-    job = PreparedWorkspaceJob("replay", "replay", "rdagent-node1", "/w/prepared/Loop1",
+    job = PreparedWorkspaceJob("replay", "replay", "rdagent-node1", "/w/prepared/Loop4",
                                build, AsyncMock(return_value={"recorder": "finished"}))
 
     async def scenario():
@@ -126,3 +129,5 @@ def test_prepared_workspace_keeps_same_worker_and_registration_on_resume(monkeyp
     register.assert_called_once()
     assert len(seen) == 2 and seen[0] == seen[1]
     assert seen[0][1] == saved["custom_params"]
+    assert saved["custom_params"]["_qe_run_registration"]["loop_index"] == 4
+    assert saved["custom_params"]["_qe_archive_replay_source"]["source_loop_index"] == 2
