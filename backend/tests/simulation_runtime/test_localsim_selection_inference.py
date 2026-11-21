@@ -491,6 +491,147 @@ def test_historical_seed_batch_uses_one_node_and_requires_ordered_seed_receipts(
         LOCALSIM_INFERENCE_SCOPE.reset(token)
 
 
+@pytest.mark.parametrize("case", ["reuse", "tampered_index", "changed_source", "new_release",
+                                  "failed_following_day", "unavailable_following_input", "database", "explicit_pit"])
+def test_file_replay_prefetch_validates_each_day_and_reuses_its_own_completed_node(tmp_path, monkeypatch, case):
+    from backend.services.advisory_historical_range import input_source_plan as source_plans
+    from backend.services.selection_center.canonical_pit_runtime import SelectionPitRuntimeLease
+    from backend.services.simulation_runtime import localsim_input_source_plan, localsim_selection_inference as inference
+    from backend.tests.simulation_runtime.test_localsim_native_context import _canonical_resolver
+
+    _, _, provider = _provider(tmp_path, monkeypatch)
+    following = DAY + timedelta(days=1)
+    clocks = [SelectionSignalDayV1(DAY, DAY-timedelta(days=5), DAY), SelectionSignalDayV1(following, DAY, following)]
+    plan = {"run_id": "sealed-plan", "plan_hash": "a" * 64, "days": [c.to_dict() for c in clocks]}
+    pin = "d" * 64
+    checked_components = []
+
+    def verify_file(name):
+        checked_components.append(name)
+        if case == "changed_source":
+            raise ValueError("frozen component changed")
+
+    dataset = SimpleNamespace(identity=pin, root=tmp_path, assert_unchanged=lambda: None,
+                              binding={"files": {"daily_pv": {}}}, file=verify_file)
+    monkeypatch.setattr("backend.services.simulation_runtime.localsim_file_inputs.current_file_dataset", lambda: dataset)
+    lease = SelectionPitRuntimeLease.from_binding(_canonical_resolver().binding).as_dict()
+    lease["coverage_start"] = "2025-01-01"
+    lease["coverage_end"] = "2026-10-30"
+    weight = tmp_path / "fixed-model.bin"
+    weight.write_bytes(b"weight")
+
+    def scope_and_workspace(c):
+        owner = "replacement-release" if case == "new_release" and c.decision_date == following else "owned-release"
+        scope = LocalSimInferenceScope(c.decision_date.isoformat(), tmp_path / str(c.decision_date) / "run", c, {},
+                                       source_plan=plan, file_prefetch_owner=owner)
+        path = scope.root / "workspaces" / "native-seed"
+        path.mkdir(parents=True)
+        workspace = SimpleNamespace(workspace_path=path, manifest_path=path / "manifest.json",
+            factor_order_path=path / "factor_order.json", factor_entry_path=path / "entry.py",
+            factor_order=["a"], model_params_path=weight, dataset_processor_path=None)
+        _atomic_json(workspace.factor_order_path, {"factor_order": ["a"]})
+        workspace.factor_entry_path.write_text(f"x = {win_to_wsl_path(str(path))!r}", encoding="utf-8")
+        _atomic_json(workspace.manifest_path, {
+            "pit_identity": {"universe_as_of": str(c.data_cutoff)},
+            "canonical_pit_runtime_lease": lease,
+            "prefetch_uses_plan_pit": case != "explicit_pit",
+        })
+        return scope, workspace
+
+    monkeypatch.setattr(source_plans, "resolve_day_source", lambda _plan, c: {
+        "source": "DATABASE" if case == "database" and c.decision_date == following else "DATASET_FILES",
+        "file_binding_hash": pin, "pit_policy": {"authority": "frozen"},
+    })
+    monkeypatch.setattr(source_plans, "create_input_session",
+                        lambda _plan, c, **_: SimpleNamespace(clocks=c, close=lambda: None))
+    def daily_pit(session, **_):
+        if case == "unavailable_following_input":
+            raise source_plans.SourcePlanError("FUTURE_SOURCE_UNAVAILABLE")
+        return {"universe_as_of": str(session.clocks.data_cutoff)}
+
+    monkeypatch.setattr(source_plans, "session_pit_identity", daily_pit)
+    monkeypatch.setattr(localsim_input_source_plan, "validate_payload", lambda _plan, c, payload:
+                        {"cutoff": str(c.data_cutoff), "source": payload["input_context"]["frozen_file_binding_hash"]})
+
+    def check_day_pit(payload, _lease, c, *, file_binding_hash, planned_identity):
+        assert file_binding_hash == pin
+        assert planned_identity == {"universe_as_of": str(c.data_cutoff)}
+        assert payload["input_context"]["pit_identity"] == planned_identity
+
+    monkeypatch.setattr(inference, "_require_native_pit_receipt", check_day_pit)
+    monkeypatch.setattr(inference, "probe_localsim_wsl_witness", lambda **_: None)
+    calls = []
+
+    def run(_arguments, **_):
+        scope = inference.own_scope()
+        node = next((scope.root / "node").iterdir())
+        requests = json.loads((node / "plan.json").read_bytes())
+        calls.append((node, requests))
+        producer = next((scope.root / "workspaces").iterdir())
+        results = []
+        fail = case == "failed_following_day" and len(requests) == 2
+        for req in requests[:1] if fail else requests:
+            c = next(c for c in clocks if str(c.decision_date) == req["decision_date"])
+            path = node / "batch_dates" / str(c.decision_date) / "scores.json"
+            _atomic_json(path, {"ok": True, "scores": [{"symbol": "000001.SZ", "score": c.decision_date.day}],
+                "universe_count": 1, "source_read_receipts": [],
+                "input_context": {"pit_identity": req.get("pit_identity", {"universe_as_of": str(c.data_cutoff)}),
+                                  "frozen_file_binding_hash": pin, "universe_input_hash": "c" * 64},
+                "metadata": {"consumer_scope": "LOCALSIM", "run_id": plan["run_id"], "binding": "b" * 64,
+                             "runtime_workspace": win_to_wsl_path(str(producer)), "clocks": c.to_dict()}})
+            results.append({"trade_date": str(c.decision_date), "output_path": win_to_wsl_path(str(path)),
+                            "sha256": hashlib.sha256(path.read_bytes()).hexdigest()})
+        _atomic_json(node / "batch.json", {"consumer_scope": "LOCALSIM", "run_id": plan["run_id"], "binding": "b" * 64,
+            "status": "FAILED" if fail else "COMPLETE", "ok": not fail, "results": results,
+            **({"failed_clocks": clocks[1].to_dict(), "failed_stage": "raw_inference", "reason_code": "bad_future_input"}
+               if fail else {})})
+        return SimpleNamespace(returncode=int(fail), stdout="", stderr="")
+
+    monkeypatch.setattr(inference.subprocess, "run", run)
+    scopes = [scope_and_workspace(c) for c in clocks]
+    first, workspace = scopes[0]
+    token = LOCALSIM_INFERENCE_SCOPE.set(first)
+    try:
+        result = provider.run(workspace=workspace, trade_date=DAY, cutoff_date=first.clocks.data_cutoff)
+    finally:
+        LOCALSIM_INFERENCE_SCOPE.reset(token)
+    assert result.scores[0]["score"] == DAY.day
+    assert len(first.source_plan_inputs) == 1
+    if case in {"database", "explicit_pit"}:
+        assert len(calls[0][1]) == 1
+        return
+    if case == "unavailable_following_input":
+        assert len(calls[0][1]) == 1
+        assert result.metadata["prefetch_following_failure"]["reason_code"] == "FUTURE_SOURCE_UNAVAILABLE"
+        assert not provider._prefetched_file_days
+        return
+    assert len(calls[0][1]) == 2
+    assert calls[0][1][1]["pit_identity"] == {"universe_as_of": str(DAY)}
+    if case == "failed_following_day":
+        assert result.metadata["prefetch_following_failure"]["reason_code"] == "bad_future_input"
+    if case == "tampered_index":
+        with (calls[0][0] / "batch.json").open("ab") as handle:
+            handle.write(b" ")
+
+    second, workspace = scopes[1]
+    token = LOCALSIM_INFERENCE_SCOPE.set(second)
+    try:
+        if case in {"tampered_index", "changed_source"}:
+            expected_error = "index content changed" if case == "tampered_index" else "frozen component changed"
+            with pytest.raises(ValueError, match=expected_error):
+                provider.run(workspace=workspace, trade_date=following, cutoff_date=DAY)
+            assert second.source_plan_inputs == [] and len(calls) == 1
+        else:
+            result = provider.run(workspace=workspace, trade_date=following, cutoff_date=DAY)
+            assert result.scores[0]["score"] == following.day
+            assert len(second.source_plan_inputs) == 1
+            assert (result.metadata.get("inference_file_prefetch_hit") is True) == (case == "reuse")
+            assert len(calls) == (1 if case == "reuse" else 2)
+        assert checked_components == (["daily_pv"] if case in {"reuse", "tampered_index", "changed_source"} else [])
+    finally:
+        LOCALSIM_INFERENCE_SCOPE.reset(token)
+
+
 def _canonical_node_payload(payload, scope, lease, file_binding_hash=None):
     from backend.services.canonical_pit_inference_boundary import resolve_inference_pit_identity
     from backend.services.simulation_runtime.models import canonical_json_sha256

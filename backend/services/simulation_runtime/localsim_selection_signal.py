@@ -60,6 +60,8 @@ def _selection_code_identity():
         Path(__file__).with_name("localsim_file_inputs.py"), base / "simulation_data/frozen_file_adapters.py",
         Path(__file__).with_name("localsim_input_source_plan.py"), base / "advisory_historical_range/input_source_plan.py",
     )
+    paths += tuple(base / "advisory_historical_range" / (name + ".py") for name in (
+        "alpha158_batch", "inference_session", "inference_features", "factor_input_materialization"))
     paths += tuple(base / "strategy_package" / (name + ".py") for name in (
         "selection_computation", "selection_artifact", "selection_signal_preparation", "live_inference", "runtime",
         "multi_alpha_live", "reference_prices"))
@@ -408,6 +410,11 @@ class LocalSimSelectionSignalService(StrategyPackageSelectionService):
                 if cutoff is not None and cutoff != planned_clocks.data_cutoff:
                     raise ValueError("LocalSIM native C differs from the frozen source plan")
                 scope.clocks, scope.clocks_bound, scope.source_plan = planned_clocks, True, source_plan
+                if route["source"] == "DATASET_FILES" and release is not None and recovery_evidence is None:
+                    scope.file_prefetch_owner = canonical_json_sha256({
+                        "release_hash": release.release_hash,
+                        "producer_code": _selection_code_identity(),
+                    })
             native_kwargs = kwargs
             if source_plan is not None:
                 # The public kernel uses DB_HISTORICAL as its historical signal
