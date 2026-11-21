@@ -3020,7 +3020,7 @@ class PostgresHistoricalRangeRepository:
                 cur.execute(
                     """
                     UPDATE app.advisory_historical_range_batch
-                    SET status = 'CANCELLING', row_version = row_version + 1,
+                    SET status = 'CANCELLING', waiting_stage = NULL, row_version = row_version + 1,
                         successful_day_count = %s, terminal_failed_day_count = %s,
                         completed_program_count = %s, failed_program_count = %s,
                         waiting_program_count = %s, retryable_program_count = %s,

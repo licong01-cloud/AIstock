@@ -15,6 +15,28 @@
   ],
   "created_at": "2026-11-21T15:50:01.581616Z",
   "description": "cancel_execution_batch写CANCELLING仍携带DAY_INPUT，PostgreSQL CheckViolation，取消失败且事务回滚。",
+  "design_compliance": [
+    {
+      "evidence": "Native DEV pipeline cancellation succeeds against real constraint; no placeholder result.",
+      "item": 1,
+      "result": "PASS"
+    },
+    {
+      "evidence": "Failures remain visible; complete days preserved and stale CAS rejected.",
+      "item": 2,
+      "result": "PASS"
+    },
+    {
+      "evidence": "Existing cancellation semantics restored; no model/input/time/cost/lease changes.",
+      "item": 3,
+      "result": "PASS"
+    },
+    {
+      "evidence": "No new approval, gate, RBAC, service or job.",
+      "item": 4,
+      "result": "PASS"
+    }
+  ],
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -26,12 +48,18 @@
   "evidence_uris": [],
   "expected": "取消等待输入批次按现有取消语义原子进入CANCELLING/CANCELLED并清除只属于WAITING_INPUT的等待阶段，保留已有成功日和CAS。",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261121_BUG-2275-waiting-stage.json",
       "backend/services/advisory_historical_range/repository.py",
       "backend/tests/advisory_historical_range/test_r5_postgres_e2e.py"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261121_BUG-2275-waiting-stage.json",
+      "backend/services/advisory_historical_range/repository.py",
+      "backend/tests/advisory_historical_range/test_r5_postgres_e2e.py"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/advisory_historical_range/repository.py",
@@ -91,6 +119,10 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pre_execution_scope_review": {
+    "runtime_source_hold": "Keep isolated worktree/PR until frozen rollout finishes; do not merge or restart backend during the rollout.",
+    "scope": "Single cancel SQL field cleanup and real DEV regression only; no schema, PIT, leases, input, inference or economic change. Native constraint and actual DEV failure established before patch."
+  },
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -100,14 +132,48 @@
     "l0",
     "advisory_historical_range_backend"
   ],
+  "review_rounds": [
+    {
+      "evidence": "Only waiting_stage=NULL added to the existing atomic CANCELLING UPDATE. Existing CAS, attempt fencing, day records and aggregate logic retained; no schema or relaxed constraint.",
+      "result": "PASS",
+      "round": 1,
+      "type": "correctness"
+    },
+    {
+      "evidence": "12 final related tests passed, including real existing-DEV native cancellation and stale repository CAS. Test transaction lifecycle boundary and asynchronous guard expectation were corrected before final matrix; not independent review.",
+      "result": "PASS",
+      "round": 2,
+      "type": "completeness_and_regression"
+    },
+    {
+      "evidence": "Final repository source matches the fresh native DEV proof. The owned DEV validation batch actually cancelled using normal connections; production frozen pilot unchanged.",
+      "repository_sha256": "6bdbcb2a73b9e190036b19895c8b3036a76731d3a396ea23cc384c4e18ec1cf8",
+      "result": "PASS",
+      "round": 3,
+      "type": "final_source_revision"
+    }
+  ],
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "backend_restart_required": true,
+    "business_smoke_contract_id": "object_liveness",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/historical-range-options",
+    "fresh_process_evidence": [
+      "{\"after_status\": \"CANCELLED\", \"at\": \"2026-11-21T16:01:33.145891+00:00\", \"backend_control\": false, \"batch_id\": \"ahrb_fde7b04d40fc2d18d585b986d9239280\", \"before_status\": \"WAITING_INPUT\", \"direct_regressions\": 12, \"model_fits\": 0, \"model_predictions\": 0, \"production_writes\": 0, \"repository_sha256\": \"6bdbcb2a73b9e190036b19895c8b3036a76731d3a396ea23cc384c4e18ec1cf8\", \"schema\": \"advisory_cancel_fresh_process_dev_v1\", \"status\": \"PASS\", \"target\": \"existing aistock_dev\", \"waiting_stage\": null}",
+      "Fresh native existing-DEV cancellation through ApplicationService and real normal transactions (no deferred test connection) passed: WAITING_INPUT/DAY_INPUT -> CANCELLED/null. No production writes, model fits, predictions, backend control or lease changes."
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -125,6 +191,29 @@
   "trigger_condition": {
     "fingerprint": "8a34762ae7da423d2c126ff2",
     "source_event_id": "FE-20261121-8a34762ae7da"
+  },
+  "validation_summary": {
+    "ci_note": "The two DEV mutation regressions require an explicitly owned waiting batch/artifact fixture; without it they skip. Direct local run supplied the real fixture and both passed.",
+    "direct_tests": 12,
+    "fresh_dev_proof": {
+      "after_status": "CANCELLED",
+      "at": "2026-11-21T16:01:33.145891+00:00",
+      "backend_control": false,
+      "batch_id": "ahrb_fde7b04d40fc2d18d585b986d9239280",
+      "before_status": "WAITING_INPUT",
+      "direct_regressions": 12,
+      "model_fits": 0,
+      "model_predictions": 0,
+      "production_writes": 0,
+      "repository_sha256": "6bdbcb2a73b9e190036b19895c8b3036a76731d3a396ea23cc384c4e18ec1cf8",
+      "schema": "advisory_cancel_fresh_process_dev_v1",
+      "status": "PASS",
+      "target": "existing aistock_dev",
+      "waiting_stage": null
+    },
+    "junit_sha256": "a1280e833a8a4261ab5ae483826390efb673fa83f38d92d79198c296adfedbb4",
+    "skipped": 0,
+    "source_delivery": "PR only while original frozen rollout is active; merge after rollout finishes."
   },
   "verification_budget": {
     "budget": "standard",
