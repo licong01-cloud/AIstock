@@ -49,15 +49,15 @@
   "expected": "Six enabled programs can render one complete bounded card and deliver once through the existing snapshot, spreadsheet and transport path.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261121_BUG-2278-advisory-aggregate-mobile-delivery-rejects-six-enabled-strategy-programs.json",
       "backend/services/advisory_forward/notification_presentation.py",
-      "backend/tests/advisory_model_first/test_advisory_notification_presentation.py"
+      "backend/tests/advisory_model_first/test_advisory_notification_presentation.py",
+      "tests/aistock_validation/bugs/20261121_BUG-2278-advisory-aggregate-mobile-delivery-rejects-six-enabled-strategy-programs.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261121_BUG-2278-advisory-aggregate-mobile-delivery-rejects-six-enabled-strategy-programs.json",
       "backend/services/advisory_forward/notification_presentation.py",
-      "backend/tests/advisory_model_first/test_advisory_notification_presentation.py"
+      "backend/tests/advisory_model_first/test_advisory_notification_presentation.py",
+      "tests/aistock_validation/bugs/20261121_BUG-2278-advisory-aggregate-mobile-delivery-rejects-six-enabled-strategy-programs.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -109,8 +109,8 @@
   },
   "first_seen_at": "2026-11-21T17:27:54.928836Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "cd9192ac5fe3737a1ee8381b4f6983bd4d855cfb",
+  "fixed_at": "2026-11-21T17:41:47Z",
   "github_issue_number": 7438,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7438",
   "last_seen_at": "2026-11-21T17:27:54.928836Z",
@@ -118,6 +118,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7439",
   "pre_execution_scope_review": {
     "provider_constraint": "https://open.feishu.cn/document/feishu-cards/feishu-card-cardkit/components/table",
     "runtime_hold": "No service control during the replay. Source merge and runtime activation remain separate.",
@@ -188,6 +189,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -199,7 +201,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2278",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "56d174c50da6f6e7",
+    "recorded_at": "2026-11-21T17:43:12.367045Z",
+    "runtime_contract_digest": "7b1423491f0f2eea1820be95f724c6e1534b176b7ef4a2e67c186b77309ddb44",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "d4d89e8d4da5323f8a8351fab8909f02eb7613b8",
+    "source_merge_commit": "cd9192ac5fe3737a1ee8381b4f6983bd4d855cfb",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7439",
+    "validation_evidence": [
+      "python -m pytest backend/tests/advisory_model_first/test_advisory_notification_presentation.py backend/tests/advisory_model_first/test_advisory_feishu_sheets.py -q -> 51 passed",
+      "python -m nox -s l0 -> passed"
+    ],
+    "validation_evidence_digest": "50da9e4c6dfbd9fc876389aa359d443e744eed77e231ea02dfb02dc5a8952469"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "advisory"
   ],
@@ -208,6 +232,10 @@
     "fingerprint": "460d67f65e7938d3085287f9",
     "source_event_id": "FE-20261121-460d67f65e79"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/advisory_model_first/test_advisory_notification_presentation.py backend/tests/advisory_model_first/test_advisory_feishu_sheets.py -q -> 51 passed",
+    "python -m nox -s l0 -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
