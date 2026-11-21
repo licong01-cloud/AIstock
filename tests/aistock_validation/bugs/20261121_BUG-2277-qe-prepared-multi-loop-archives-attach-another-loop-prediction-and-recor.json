@@ -12,7 +12,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2277",
-  "closed_at": null,
+  "closed_at": "2026-11-21T16:42:23.994831Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -221,11 +221,33 @@
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
     "post_restart_note": "After the user reloads backend-main, verify runtime identity and read back the exact 16 BUG-2277 records. Compare Archive IDs, task ID and Loop, replay and producer recorder identities, and Prediction Store SHA256 against the repair receipt. Preserve historical payloads and all economics. No execution node changes or compute replay.",
-    "post_restart_receipt_ref": null,
+    "post_restart_receipt_ref": "F:/Dev/AIstock/tmp/issue_workflow/BUG-2277/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2277",
+      "business_smoke_semantic": {
+        "contract_id": "health_ok",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "e49ea55d85a17e74db97ae002f4da0d40fbf7b0441f6386d5a270dbc76470bf6",
+      "contract_digest": "7e566e34089b329cf71fc329d390e789019c7e3cf6ad0e6b1b910a736e01a7c6",
+      "expected_identity": "f6160884d7f06a87cee74486b4b154ebdfe6ac72",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-11-21T16:41:44.510891Z",
+      "mode": "read_only",
+      "observed_identity": "f6160884d7f06a87cee74486b4b154ebdfe6ac72",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "5bf0972f93d71409cc2d11b57899cf46f5779e2c216a95798251255cb9518a11",
+      "receipt_sha256": "5a1f1c091bd5f3ab1efb7b746c19b0189c5f71150825c76cbd85dfe0f8f24e9f",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "6b6eeaa08df9f4bfb329f58dddf9e6cc8d7b530f345258b7d3184d7311e20802",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -260,7 +282,7 @@
     ],
     "validation_evidence_digest": "2fd5bf8f45c8f01cc981e3dfbe132b78e170ad8e246b5033b4c3c811b50b7b4f"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "qe.archive"
   ],
@@ -274,7 +296,8 @@
     "validation-receipt: id=6c9ff8072ef63b56 commit=478a46dbd95283da689df47ce4f34d8de38fbe15 kind=pytest plan=direct status=passed command=`python -m pytest -q backend/tests/qe_archive/test_round3_fixes.py -k prepared_archive or source_assembler or history_projection` result=`passed (7 cases)`",
     "validation-receipt: id=ca85f89421848fb8 commit=478a46dbd95283da689df47ce4f34d8de38fbe15 kind=pytest plan=direct status=passed command=`python -m pytest -q backend/tests/quantevolver/test_qe_prepared_workspace_batch.py` result=`passed (5 cases)`",
     "validation-receipt: id=e3d49231a61c5ddd commit=478a46dbd95283da689df47ce4f34d8de38fbe15 kind=pytest plan=direct status=passed command=`python -m pytest -q backend/tests/qe_archive/test_qe_asset_lifecycle.py backend/tests/qe_archive/test_manual_ingestion_selection.py` result=`passed (55 cases)`",
-    "validation-receipt: id=ef86ca7bd14c1004 commit=478a46dbd95283da689df47ce4f34d8de38fbe15 kind=ruff plan=direct status=passed command=`ruff check and git diff --check` result=`passed`"
+    "validation-receipt: id=ef86ca7bd14c1004 commit=478a46dbd95283da689df47ce4f34d8de38fbe15 kind=ruff plan=direct status=passed command=`ruff check and git diff --check` result=`passed`",
+    "post-restart 16 live pointer readbacks and read-only stale Loop 1 enrichment regressions -> passed (16/16 source hashes and economics matched; 10 producer and replay recorder pairs)"
   ],
   "verification_budget": {
     "budget": "standard",
