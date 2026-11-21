@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import os
+import asyncio
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Mapping
+from uuid import uuid4
 
 from dotenv import dotenv_values
 import psycopg2
@@ -118,3 +121,119 @@ def test_real_dev_postgres_batch_and_operation_projection() -> None:
         batch = repository.get_batch(str(page["items"][0]["batch_id"]))
         operations = repository.list_operations(batch_id=str(batch["batch_id"]), limit=5)
         assert isinstance(operations["items"], list)
+
+
+@pytest.fixture
+def waiting_cancel_dev_case(tmp_path):
+    """Exercise an explicitly supplied DEV case with all SQL rolled back.
+
+    No case is selected from another developer's queue. Frozen artifacts remain
+    real; only commit ownership is deferred to the outer test transaction.
+    """
+    batch_id = os.environ.get('AISTOCK_ADVISORY_CANCEL_DEV_BATCH_ID')
+    artifact_root = os.environ.get('AISTOCK_ADVISORY_CANCEL_DEV_ARTIFACT_ROOT')
+    if not batch_id or not artifact_root or _MISSING_DEV_DB_KEYS:
+        pytest.skip('explicit owned DEV waiting batch and artifact root required')
+    from backend.services.advisory_historical_range.composition import (
+        build_explicit_historical_range_r5_runtime_factory,
+        build_historical_range_r5_application_service,
+    )
+    settings = dotenv_values(_DEFAULT_ENV_FILE, interpolate=False)
+    conn = psycopg2.connect(**_validated_dev_connect_kwargs(_DEV_ENV_VALUES), connect_timeout=5)
+    conn.set_session(isolation_level='REPEATABLE READ', autocommit=False)
+
+    class OuterTransaction:
+        autocommit = None
+
+        def __getattr__(self, name):
+            return getattr(conn, name)
+
+        def commit(self):
+            pass
+
+        def rollback(self):
+            pass
+
+        def set_session(self, **kwargs):
+            # Native query helpers open/close independent read transactions in
+            # production. Here real SQL shares the outer repeatable-read DEV
+            # fixture transaction so it can observe its uncommitted test rows.
+            # Read-only session enforcement is not the subject of this test.
+            pass
+
+    @contextmanager
+    def factory():
+        yield OuterTransaction()
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute('SELECT current_database()')
+            assert 'dev' in cur.fetchone()[0].lower()
+            cur.execute('SELECT status,waiting_stage,row_version FROM app.advisory_historical_range_batch '
+                        'WHERE batch_id=%s FOR UPDATE NOWAIT', (batch_id,))
+            before = cur.fetchone()
+            if not before or before[:2] != ('WAITING_INPUT', 'DAY_INPUT'):
+                pytest.skip('provided DEV case must be waiting on a real execution input')
+            cur.execute("SELECT day.day_run_id,day.day_receipt_hash FROM app.advisory_historical_range_day_run day "
+                        "JOIN app.advisory_historical_range_run run USING(range_run_id) "
+                        "WHERE run.batch_id=%s AND day.status IN ('COMPLETE','VALID_NO_CANDIDATE') "
+                        "ORDER BY day.day_run_id", (batch_id,))
+            completed = cur.fetchall()
+        runtime_root = tmp_path / 'runtime'
+        runtime_root.mkdir()
+        runtime_factory = build_explicit_historical_range_r5_runtime_factory(
+            conn_factory=factory, artifact_root=Path(artifact_root), task_runtime_root=runtime_root,
+            package_asset_root=Path(settings['AISTOCK_PACKAGE_ASSET_STORE_ROOT']),
+            repository_root=Path(__file__).resolve().parents[3],
+            policy_component_root=tmp_path / 'policies', calculation_evidence_root=tmp_path / 'calculation',
+            dataset_store_root=tmp_path / 'datasets',
+        )
+        service = build_historical_range_r5_application_service(
+            query_runtime_factory=runtime_factory, mutation_runtime_factory=runtime_factory,
+        )
+        yield service, conn, batch_id, before, completed
+    finally:
+        conn.rollback()
+        conn.close()
+
+
+def test_real_dev_cancel_waiting_batch_clears_waiting_stage_and_preserves_completed_days(waiting_cancel_dev_case):
+    from fastapi import BackgroundTasks
+    from backend.services.advisory_historical_range.api_models import HistoricalRangeCommandRequest
+
+    service, conn, batch_id, before, completed = waiting_cancel_dev_case
+    background = BackgroundTasks()
+    service.cancel_batch(batch_id, HistoricalRangeCommandRequest(
+        operation_idempotency_key='dev-cancel-regression-' + uuid4().hex,
+        expected_row_version=before[2],
+    ), background_tasks=background)
+    asyncio.run(background())
+    with conn.cursor() as cur:
+        cur.execute('SELECT status,waiting_stage FROM app.advisory_historical_range_batch WHERE batch_id=%s', (batch_id,))
+        assert cur.fetchone() == ('CANCELLED', None)
+        cur.execute("SELECT day.day_run_id,day.day_receipt_hash FROM app.advisory_historical_range_day_run day "
+                    "JOIN app.advisory_historical_range_run run USING(range_run_id) "
+                    "WHERE run.batch_id=%s AND day.status IN ('COMPLETE','VALID_NO_CANDIDATE') "
+                    "ORDER BY day.day_run_id", (batch_id,))
+        assert cur.fetchall() == completed
+        cur.execute("SELECT count(*) FROM app.advisory_historical_range_day_run day "
+                    "JOIN app.advisory_historical_range_run run USING(range_run_id) "
+                    "WHERE run.batch_id=%s AND day.status NOT IN ('COMPLETE','VALID_NO_CANDIDATE','CANCELLED','FAILED')",
+                    (batch_id,))
+        assert cur.fetchone()[0] == 0
+
+
+def test_real_dev_cancel_stale_batch_version_keeps_waiting_state(waiting_cancel_dev_case):
+    from backend.services.advisory_historical_range.models import HistoricalRangeContractError
+    from backend.services.advisory_historical_range.repository import REASON_ROW_VERSION_CONFLICT
+
+    service, conn, batch_id, before, _ = waiting_cancel_dev_case
+    repository = service._mutation_runtime_factory().repository
+    with pytest.raises(HistoricalRangeContractError) as caught:
+        repository.cancel_execution_batch(batch_id=batch_id, expected_batch_row_version=before[2] - 1,
+                                          attempts={})
+    assert caught.value.reason_code == REASON_ROW_VERSION_CONFLICT
+    with conn.cursor() as cur:
+        cur.execute('SELECT status,waiting_stage,row_version FROM app.advisory_historical_range_batch WHERE batch_id=%s',
+                    (batch_id,))
+        assert cur.fetchone() == before
