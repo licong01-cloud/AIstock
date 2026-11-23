@@ -1,5 +1,6 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
 import historicalReplay from "../fixtures/advisory-lstm-historical-replay.json";
+import type { DailyItem } from "../../src/lib/api/advisoryWorkbench";
 
 const snapshot = "a".repeat(64);
 const target = "2026-10-28";
@@ -19,7 +20,22 @@ function episode(index: number, p = "lstm") {
   return { episode_id: `episode-${index}`, symbol: index < 2 ? "600001.SH" : `600${String(index).padStart(3, "0")}.SH`, stock_name: index < 2 ? "重复入选股票" : `历史股票 ${index + 1}`, status: "EXITED", signal_date: "2026-10-12", effective_entry_date: "2026-10-13", effective_exit_date: "2026-10-20", exit_signal_date: "2026-10-19", entry_price: 18.5, exit_price: 17.8, current_rank: null, entry_rank: 1, exit_reason: index % 2 ? "STOP_LOSS" : "TAKE_PROFIT", holding_trading_days: 5, performance_state: "SETTLED", performance_reason_code: null, return_bps: index % 2 ? -410 : 620, return_kind: "REALIZED", progress: "ENDED", mark_date: "2026-10-27", mark_price: 17.8, source: index === 40 ? "UNKNOWN" : "FORWARD", binding_version_id: `${p}-binding`, metric_as_of_trade_date: "2026-10-27" };
 }
 const stocks = Array.from({ length: 8 }, (_, i) => ({ symbol: `60010${i}.SH`, stock_name: `当日股票 ${String.fromCharCode(65 + i)}`, episode_id: [0, 2, 6].includes(i) ? null : `episode-${i}`, rank: i + 1, membership: "IN_SCOPE", change: [0, 2, 6].includes(i) ? "NEW" : "CONTINUING", progress: [0, 2, 6].includes(i) ? "PENDING_ENTRY" : "TRACKING", consecutive_days: [0, 2, 6].includes(i) ? 1 : i + 1, reference_price: 42.18, reference_date: "2026-10-27", episode: [0, 2, 6].includes(i) ? undefined : { ...episode(i), status: "ACTIVE", progress: "TRACKING", return_kind: "UNREALIZED" } }));
-type State = { seen: string[]; fail?: boolean; conflict?: boolean; hold?: Promise<void>; wrongIdentity?: boolean; waiting?: boolean; dense?: boolean; delayedRemoved?: boolean; quoteFailure?: "network" | "identity"; quotePrice?: number; business?: "complete" | "unknown" | "immature"; businessMissed?: boolean };
+const sortableStocks: DailyItem[] = Array.from({ length: 125 }, (_, i) => ({ ...stocks[i % stocks.length],
+  symbol: `600${300 + i}.SH`, stock_name: ["丙股票", "甲股票", "乙股票"][i] || `排序股票 ${i + 1}`,
+  rank: i === 124 ? null : i + 1, change: [2, 124].includes(i) ? "UNKNOWN" : i % 2 ? "CONTINUING" : "NEW",
+  consecutive_days: [122, 124].includes(i) ? null : i === 1 ? 10 : i === 2 ? 2 : i + 1,
+})).reverse();
+function sortingQuote(symbol: string, price?: number) {
+  const i = Number(symbol.slice(0, 6)) - 600300;
+  if (i < 0 || i > 124) return {};
+  const missing = i === 124, base = i === 0 ? 10 : i === 1 ? 2 : i === 2 ? 100 : i + 20;
+  return { price: missing ? null : price ?? base, today_return_bps: missing ? null : i === 0 ? 100 : i === 1 ? -200 : i === 2 ? 0 : i * 10,
+    recommendation: { segment_id: `sort-${i}`, start_date: missing ? null : i === 0 ? "2026-01-10" : i === 1 ? "2026-01-02" : i === 2 ? "2026-01-01" : "2026-01-05",
+      base_price: missing ? null : base, consecutive_days: missing ? null : i === 122 ? 1000 : i + 1,
+      end_date: null, end_price: null, return_bps: missing ? null : i === 0 ? -100 : i === 1 ? 0 : i * 100,
+      known_through_date: target, state: "RECOMMENDED", reason_code: missing ? "QUOTE_NOT_VALID_FOR_SEGMENT" : null } };
+}
+type State = { seen: string[]; fail?: boolean; conflict?: boolean; hold?: Promise<void>; wrongIdentity?: boolean; waiting?: boolean; dense?: boolean; delayedRemoved?: boolean; sortList?: boolean; invalidSortSymbol?: boolean; holdSortTail?: Promise<void>; malformedSortPage?: "identity" | "short"; quoteFailure?: "network" | "identity"; quotePrice?: number; business?: "complete" | "unknown" | "immature"; businessMissed?: boolean };
 function businessShadow(mode: NonNullable<State["business"]>, missed = false) {
   const complete = mode === "complete", unknown = mode === "unknown";
   const evaluation = { status: complete ? "COMPLETE" : unknown ? "UNKNOWN" : "IMMATURE_OR_PENDING", native_net_bps: complete || unknown ? 200 : null, specialist_net_bps: complete ? 400 : null, delta_bps: complete ? 200 : null, native_unknown_slots: unknown ? 0 : complete ? 0 : null, specialist_unknown_slots: unknown ? 1 : complete ? 0 : null, native_cash_slots: complete ? 0 : null, specialist_cash_slots: complete ? 0 : null };
@@ -65,7 +81,7 @@ async function setup(page: Page, state: State) {
       if (state.dense) await new Promise(resolve => setTimeout(resolve, 200));
       const symbols = (url.searchParams.get("symbols") || "").split(",");
       return json(route, { schema_version: "advisory_display_quotes_v1", return_schema_version: "advisory_recommendation_returns_v1", program_id: p, list_version_id: url.searchParams.get("list_version_id"), items: Object.fromEntries(symbols.map(symbol => [symbol, { symbol, price: symbol === "600102.SH" ? null : state.quotePrice ?? 46.398, kind: "CLOSE", trade_date: target, observed_at: stamp, today_return_bps: symbol === "600102.SH" ? null : 500, reason_code: symbol === "600102.SH" ? "TDX_CLOSE_MISSING" : null,
-        recommendation: { segment_id: `${p}-${symbol}`, start_date: "2026-10-26", base_price: 42.18, known_through_date: target, end_date: symbol.startsWith("6002") ? target : null, end_price: symbol.startsWith("6002") ? 43 : null, return_bps: symbol === "600102.SH" ? null : symbol.startsWith("6002") ? 194.405 : 1000, state: symbol.startsWith("6002") ? "ENDED" : "RECOMMENDED", valuation_date: target, reason_code: symbol === "600102.SH" ? "QUOTE_NOT_VALID_FOR_SEGMENT" : null } }])) });
+        recommendation: { segment_id: `${p}-${symbol}`, start_date: "2026-10-26", base_price: 42.18, known_through_date: target, end_date: symbol.startsWith("6002") ? target : null, end_price: symbol.startsWith("6002") ? 43 : null, return_bps: symbol === "600102.SH" ? null : symbol.startsWith("6002") ? 194.405 : 1000, state: symbol.startsWith("6002") ? "ENDED" : "RECOMMENDED", valuation_date: target, reason_code: symbol === "600102.SH" ? "QUOTE_NOT_VALID_FOR_SEGMENT" : null }, ...(state.sortList ? sortingQuote(symbol, state.quotePrice) : {}) }])) });
     }
     if (view === "readiness") return json(route, { program_id: p, data_date: "2026-10-27", status: "AVAILABLE", items: [{ consumer_ready: false, all_sync_complete: false }], errors: [] });
     if (state.conflict) return json(route, { detail: { reason_code: "SNAPSHOT_CHANGED", message: "读取期间数据已更新，请刷新后继续查看。" } }, 409);
@@ -78,19 +94,27 @@ async function setup(page: Page, state: State) {
     }
     if (view === "history" && parts[2]) {
       const group = url.searchParams.get("group") || "IN_SCOPE";
-      const items = group === "IN_SCOPE" ? [{ ...stocks[0], symbol: "600200.SH", stock_name: "已结束荐股期间股票" }, ...stocks.slice(1)] : [];
-      return json(route, { ...envelope(p), list_version_id: parts[2], selected: { ...version(p), list_version_id: parts[2], source: "FORWARD" }, status: "PUBLISHED", items: items.slice(offset, offset + limit), total_count: items.length, limit, offset, summary: { in_scope: 8, new: 3, continuing: 5, removed: 0, unknown_change: 0, observation: 0, outside_pending: 0, unknown: 0, previous_count: 5, comparison_known: true } });
+      const items = group === "IN_SCOPE" ? state.sortList ? sortableStocks : [{ ...stocks[0], symbol: "600200.SH", stock_name: "已结束荐股期间股票" }, ...stocks.slice(1)] : [];
+      return json(route, { ...envelope(p), list_version_id: parts[2], selected: { ...version(p), list_version_id: parts[2], source: "FORWARD" }, status: "PUBLISHED", items: items.slice(offset, offset + limit), total_count: items.length, limit, offset, summary: { in_scope: state.sortList ? 125 : 8, new: 3, continuing: 5, removed: 0, unknown_change: 0, observation: 0, outside_pending: 0, unknown: 0, previous_count: 5, comparison_known: true } });
     }
     if (view === "daily") {
       if (p === "parent") return json(route, { ...envelope(p), status: "NO_CURRENT_LIST", items: [], total_count: 0, limit, offset, summary: null });
       const group = url.searchParams.get("group") || "IN_SCOPE";
       if (state.delayedRemoved && group === 'REMOVED') await new Promise(resolve => setTimeout(resolve, 120));
-      let items = group === "IN_SCOPE" ? stocks : group === "REMOVED" || group === "OUTSIDE_PENDING" ? ["I", "J"].map((name, i) => ({ ...stocks[i], symbol: `60020${i}.SH`, stock_name: `移出股票 ${name}`, membership: "OUTSIDE_PENDING", change: "REMOVED", progress: "WAITING_REVIEW", reason_code: "PENDING_TARGET_OPEN_REVIEW" })) : [];
+      let items: DailyItem[] = group === "IN_SCOPE" ? stocks : group === "REMOVED" || group === "OUTSIDE_PENDING" ? ["I", "J"].map((name, i) => ({ ...stocks[i], symbol: `60020${i}.SH`, stock_name: `移出股票 ${name}`, membership: "OUTSIDE_PENDING", change: "REMOVED", progress: "WAITING_REVIEW", reason_code: "PENDING_TARGET_OPEN_REVIEW" })) : [];
       if (state.dense && group === 'IN_SCOPE') items = Array.from({ length: 25 }, (_, i) => ({ ...stocks[i % stocks.length], symbol: `600${100 + i}.SH`, stock_name: `密集名单 ${i + 1}`, rank: i + 1 }));
+      if (state.sortList && group === 'IN_SCOPE') items = sortableStocks;
+      if (state.invalidSortSymbol && group === 'IN_SCOPE') items = [...items, { ...stocks[0], symbol: 'UNKNOWN', stock_name: '待核验代码', rank: null, membership: 'UNKNOWN', change: 'UNKNOWN' }];
       const change = url.searchParams.get("change"), q = url.searchParams.get("q");
+      if (state.holdSortTail && state.sortList && group === 'IN_SCOPE' && offset > 0 && !q) await state.holdSortTail;
       if (change) items = items.filter(row => row.change === change);
-      if (q) items = items.filter(row => row.stock_name.includes(q));
-      return json(route, { ...envelope(p), status: "PUBLISHED", items: items.slice(offset, offset + limit), total_count: items.length, limit, offset, summary: { in_scope: 8, new: 3, continuing: 5, removed: 2, unknown_change: 0, observation: 3, outside_pending: 2, unknown: 0, previous_count: 7, comparison_known: true } });
+      if (q) items = items.filter(row => (row.stock_name || "").includes(q));
+      const badPage = state.sortList && offset > 0 && group === 'IN_SCOPE';
+      const pageItems = items.slice(offset, offset + limit);
+      if (badPage && state.malformedSortPage === 'short') pageItems.pop();
+      return json(route, { ...envelope(p), ...(badPage && state.malformedSortPage === 'identity' ? { binding_version_id: 'different-binding' } : {}), status: "PUBLISHED",
+        items: pageItems, total_count: items.length, limit, offset,
+        summary: { in_scope: state.sortList ? 125 : 8, new: 3, continuing: 5, removed: 2, unknown_change: 0, observation: 3, outside_pending: 2, unknown: 0, previous_count: 7, comparison_known: true } });
     }
     if (view === "episodes" && parts[2]) return json(route, { ...envelope(p), episode: episode(Number(parts[2].split("-")[1]), p), items: [{ trade_date: "2026-10-19", action: "EXIT", reason_code: "STOP_LOSS" }], total_count: 1, limit, offset });
     if (view === "episodes") {
@@ -185,6 +209,179 @@ test("real archived historical replay rejects malformed evidence identity", asyn
   expect(state.seen.filter(url => /\/(quotes|returns)\?/.test(url))).toEqual([]);
 });
 
+test('list column sorting uses real published API values without writes', async ({ page }) => {
+  test.skip(!process.env.ADVISORY_SORT_REAL_CAPTURE, 'A current task-local read-only API capture is required');
+  const fs = await import('node:fs/promises');
+  const data = JSON.parse(await fs.readFile(process.env.ADVISORY_SORT_REAL_CAPTURE!, 'utf8')) as Record<string, any>;
+  expect(data.provenance.real_readonly_api).toBe(true);
+  expect(data.provenance.calls.every((call: { method: string }) => call.method === 'GET')).toBe(true);
+  const seen: string[] = [], errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  const prefix = `${api}/programs/${data.program_id}`;
+  await page.route('**/api/**', async route => {
+    expect(route.request().method()).toBe('GET');
+    const url = new URL(route.request().url()), resource = url.pathname.replace(/^\/api(?:\/v1)?/, '');
+    seen.push(resource + url.search);
+    if (!resource.startsWith('/advisory/')) return json(route, { count: 0, items: [] });
+    if (resource === prefix) return json(route, data.summary);
+    if (resource === `${prefix}/readiness`) return json(route, data.readiness);
+    if (resource === `${prefix}/history/${data.version_id}`) {
+      const limit = Number(url.searchParams.get('limit') || 20), group = url.searchParams.get('group') || 'IN_SCOPE';
+      const response = limit === 20 && group === 'IN_SCOPE' ? data.pinned : data.pages[group]?.[url.searchParams.get('offset') || '0'];
+      expect(response, `No captured native list for ${url}`).toBeDefined();
+      return json(route, response);
+    }
+    if (resource === `${prefix}/returns`) {
+      expect(url.searchParams.get('list_version_id')).toBe(data.version_id);
+      const requested = (url.searchParams.get('symbols') || '').split(',');
+      for (const symbol of requested) expect(data.quotes[symbol], `No native quote for ${symbol}`).toBeDefined();
+      return json(route, { ...data.quote_envelope, items: Object.fromEntries(requested.map(symbol => [symbol, data.quotes[symbol]])) });
+    }
+    throw new Error(`Uncaptured Advisory read: ${resource}${url.search}`);
+  });
+  await page.setViewportSize({ width: 1760, height: 1100 });
+  await page.goto(`/paper-v2/advisory?program_id=${data.program_id}&list_version_id=${data.version_id}&target_date=${data.target_date}`);
+  const table = main(page).getByTestId('advisory-sortable-list').first();
+  const rows = Object.values(data.pages.IN_SCOPE).flatMap((packet: any) => packet.items) as DailyItem[];
+  const ranks = rows.map(row => row.rank).filter((rank): rank is number => rank != null && Number.isFinite(rank));
+  expect(ranks.length).toBeGreaterThan(0);
+  await expect(table.locator('thead button').first()).toBeEnabled();
+  await expect(table.locator('tbody tr')).toHaveCount(Math.min(rows.length, 20));
+  await expect(table.locator('tbody tr').first().locator('td').first()).toHaveText(Math.min(...ranks).toLocaleString('zh-CN'));
+  await expect(table.getByTestId('advisory-current-price').first()).toContainText('¥');
+  await expect(main(page).getByRole('button', { name: '刷新行情', exact: true })).toBeEnabled();
+  const reads = seen.length;
+  await table.locator('thead button').first().click();
+  await expect(table.locator('tbody tr').first().locator('td').first()).toHaveText(Math.max(...ranks).toLocaleString('zh-CN'));
+  const symbol = (await table.locator('tbody tr').first().locator('td').nth(1).locator('small').textContent())!;
+  const expectedPrice = data.quotes[symbol].price;
+  await expect(table.getByTestId('advisory-current-price').first()).toContainText(expectedPrice == null ? '—' : `¥${expectedPrice.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
+  await table.locator('thead button').nth(3).click();
+  const knownDays = rows.map(row => row.consecutive_days ?? data.quotes[row.symbol]?.recommendation?.consecutive_days).filter((days): days is number => days != null && Number.isFinite(days));
+  expect(knownDays.length).toBeGreaterThan(0);
+  await expect(table.locator('tbody tr').first().locator('td').nth(3)).toHaveText(Math.min(...knownDays) === 1 ? '首日' : `${Math.min(...knownDays)} 日`);
+  expect(seen).toHaveLength(reads); expect(errors).toEqual([]);
+  if (process.env.ADVISORY_SORT_SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.ADVISORY_SORT_SCREENSHOT_DIR}/real-native.png`, fullPage: true });
+});
+
+test('list column sorting covers every field across pages and never rereads quotes', async ({ page }) => {
+  const state: State = { seen: [], sortList: true }; await setup(page, state);
+  const metadataResponses: string[] = [];
+  page.on('response', response => { if (response.status() === 200 && response.url().includes('/lstm/daily?')) metadataResponses.push(response.url()); });
+  await page.setViewportSize({ width: 1760, height: 1100 });
+  await page.goto('/paper-v2/advisory?program_id=lstm');
+  const list = main(page).locator('section').filter({ has: page.getByRole('heading', { name: '当日推荐名单', exact: true }) }).first();
+  const table = list.getByTestId('advisory-sortable-list');
+  const header = (index: number) => table.locator('thead th').nth(index);
+  const firstSymbol = () => table.locator('tbody tr').first().locator('td').nth(1).locator('small');
+  const lastSymbol = () => table.locator('tbody tr').last().locator('td').nth(1).locator('small');
+  await expect(header(0)).toHaveAttribute('aria-sort', 'ascending');
+  await expect(header(0).getByRole('button')).toBeEnabled();
+  await expect(table.locator('tbody tr')).toHaveCount(20);
+  await expect(firstSymbol()).toHaveText('600300.SH');
+  await expect(table.getByTestId('advisory-current-price').first()).toContainText('¥10.00');
+  await expect(main(page).getByRole('button', { name: '刷新行情', exact: true })).toBeEnabled();
+  const quoteReads = () => state.seen.filter(url => url.includes('/returns?'));
+  const requested = quoteReads().flatMap(url => new URL(url.slice(4), 'http://test').searchParams.get('symbols')!.split(','));
+  expect(requested).toContain('600424.SH'); expect(new Set(requested).size).toBe(requested.length);
+  const initialQuotes = quoteReads().length, initialReads = state.seen.length;
+  const metadata = metadataResponses.map(url => new URL(url));
+  expect(metadata.filter(url => !url.searchParams.has('group')).map(url => Number(url.searchParams.get('offset')))).toEqual([0, 100]);
+  expect(metadata.every(url => url.searchParams.get('limit') === '100')).toBe(true);
+  expect(metadata.some(url => ['OUTSIDE_PENDING', 'OBSERVATION'].includes(url.searchParams.get('group') || ''))).toBe(false);
+  await list.getByRole('combobox', { name: '每页条数' }).selectOption('100');
+  const cases = [
+    ['600300.SH', '600423.SH', true], ['600300.SH', '600302.SH', false], ['600301.SH', '600300.SH', true],
+    ['600300.SH', '600422.SH', true], ['600302.SH', '600300.SH', true], ['600301.SH', '600423.SH', true],
+    ['600301.SH', '600423.SH', true], ['600300.SH', '600423.SH', true], ['600301.SH', '600423.SH', true],
+  ] as const;
+  for (const [index, [ascending, descending, missing]] of cases.entries()) {
+    if (index !== 0) await header(index).getByRole('button').click();
+    await expect(header(index)).toHaveAttribute('aria-sort', 'ascending');
+    await expect(firstSymbol()).toHaveText(ascending);
+    if (missing) { await list.getByRole('button', { name: '下一页', exact: true }).click(); await expect(lastSymbol()).toHaveText('600424.SH'); }
+    await header(index).getByRole('button').click();
+    await expect(header(index)).toHaveAttribute('aria-sort', 'descending');
+    await expect(firstSymbol()).toHaveText(descending);
+    if (missing) { await list.getByRole('button', { name: '下一页', exact: true }).click(); await expect(lastSymbol()).toHaveText('600424.SH'); }
+    await header(index).getByRole('button').click();
+    await expect(header(index)).toHaveAttribute('aria-sort', 'ascending'); await expect(firstSymbol()).toHaveText(ascending);
+  }
+  expect(quoteReads()).toHaveLength(initialQuotes); expect(state.seen).toHaveLength(initialReads);
+  await header(6).getByRole('button').focus(); await page.keyboard.press('Enter');
+  await expect(header(6)).toHaveAttribute('aria-sort', 'ascending'); await expect(firstSymbol()).toHaveText('600301.SH');
+  state.quotePrice = 200;
+  await main(page).getByRole('button', { name: '刷新行情', exact: true }).click();
+  await expect(main(page).getByRole('button', { name: '刷新行情', exact: true })).toBeEnabled();
+  await expect(firstSymbol()).toHaveText('600300.SH');
+  await expect(table.getByTestId('advisory-current-price').first()).toContainText('¥200.00');
+  await expect(header(6)).toHaveAttribute('aria-sort', 'ascending');
+  await list.getByRole('combobox', { name: '每页条数' }).selectOption('20');
+  await expect(table.locator('tbody tr')).toHaveCount(20);
+  if (process.env.ADVISORY_SORT_SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.ADVISORY_SORT_SCREENSHOT_DIR}/desktop.png`, fullPage: true });
+});
+
+test('list column sorting is shared by removed and historical lists on mobile', async ({ page }) => {
+  const state: State = { seen: [], sortList: true }; await setup(page, state);
+  await page.setViewportSize({ width: 430, height: 932 });
+  await page.goto('/paper-v2/advisory?program_id=lstm');
+  const removed = main(page).locator('section').filter({ has: page.getByRole('heading', { name: /移出 · 已不在所选日荐股范围/ }) }).first();
+  const table = removed.getByTestId('advisory-sortable-list');
+  await expect(table.locator('thead th').first().getByRole('button')).toBeEnabled();
+  await table.locator('thead th').first().getByRole('button').click();
+  await expect(table.locator('tbody tr').first()).toContainText('移出股票 J');
+  await main(page).getByRole('button', { name: '历史名单', exact: true }).click();
+  await main(page).getByRole('button', { name: `查看${target}名单版本lstm-history-0`, exact: true }).click();
+  const historyTable = main(page).getByTestId('advisory-sortable-list').first();
+  await expect(historyTable.locator('thead th').first()).toHaveAttribute('aria-sort', 'ascending');
+  await expect(historyTable.locator('thead th').first().getByRole('button')).toBeEnabled();
+  await historyTable.locator('thead th').first().getByRole('button').click();
+  await expect(historyTable.locator('tbody tr').first().locator('td').nth(1).locator('small')).toHaveText('600423.SH');
+  await expect(historyTable.locator('tbody tr')).toHaveCount(20);
+  const width = await historyTable.evaluate(node => ({ table: node.scrollWidth, box: node.parentElement!.clientWidth, view: document.documentElement.clientWidth }));
+  expect(width.box).toBeLessThanOrEqual(width.view); expect(width.table).toBeGreaterThan(width.box);
+  if (process.env.ADVISORY_SORT_SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.ADVISORY_SORT_SCREENSHOT_DIR}/mobile.png`, fullPage: true });
+});
+
+for (const malformedSortPage of ['identity', 'short'] as const) {
+  test(`list column sorting rejects ${malformedSortPage} continuation pages`, async ({ page }) => {
+    const state: State = { seen: [], sortList: true, malformedSortPage }; await setup(page, state);
+    await page.goto('/paper-v2/advisory?program_id=lstm');
+    const list = main(page).locator('section').filter({ has: page.getByRole('heading', { name: '当日推荐名单', exact: true }) }).first();
+    await expect(main(page).getByRole('alert').filter({ hasText: malformedSortPage === 'identity' ? '名单身份或总数已变化' : '完整名单分页数据不完整' })).toBeVisible();
+    await expect(list.getByTestId('advisory-sortable-list').locator('thead button').first()).toBeDisabled();
+    await expect(list.getByText('完整名单未能读取，排序暂不可用，请刷新重试。')).toBeVisible();
+    await expect(list.getByRole('button', { name: '下一页', exact: true })).toHaveCount(0);
+  });
+}
+
+test('list column sorting cancels an old continuation when the filter changes', async ({ page }) => {
+  let release!: () => void;
+  const state: State = { seen: [], sortList: true, holdSortTail: new Promise<void>(resolve => { release = resolve; }) }; await setup(page, state);
+  await page.goto('/paper-v2/advisory?program_id=lstm');
+  const list = main(page).locator('section').filter({ has: page.getByRole('heading', { name: '当日推荐名单', exact: true }) }).first();
+  await expect(list.getByText(/正在读取完整名单（100 \/ 125）/)).toBeVisible();
+  await list.getByRole('textbox', { name: '搜索当日股票' }).fill('丙');
+  await expect(list.getByTestId('advisory-sortable-list').locator('thead button').first()).toBeEnabled();
+  await expect(list.locator('tbody tr')).toHaveCount(1); await expect(list.locator('tbody tr')).toContainText('丙股票');
+  release(); await page.waitForTimeout(150);
+  await expect(list.locator('tbody tr')).toHaveCount(1); await expect(list.locator('tbody tr')).toContainText('丙股票');
+});
+
+test('list column sorting retains invalid securities without sending them to the quote provider', async ({ page }) => {
+  const state: State = { seen: [], sortList: true, invalidSortSymbol: true }; await setup(page, state);
+  await page.goto('/paper-v2/advisory?program_id=lstm');
+  const list = main(page).locator('section').filter({ has: page.getByRole('heading', { name: '当日推荐名单', exact: true }) }).first();
+  await expect(list.getByTestId('advisory-sortable-list').locator('thead button').first()).toBeEnabled();
+  await list.getByRole('combobox', { name: '每页条数' }).selectOption('100');
+  await list.getByRole('button', { name: '下一页', exact: true }).click();
+  const row = list.getByRole('row').filter({ has: page.getByRole('button', { name: '待核验代码', exact: true }) });
+  await expect(row).toBeVisible(); await expect(row.getByTestId('advisory-current-price')).toContainText('证券代码待核验');
+  await expect(main(page).getByRole('button', { name: '刷新行情', exact: true })).toBeEnabled();
+  const symbols = state.seen.filter(url => url.includes('/returns?')).flatMap(url => new URL(url.slice(4), 'http://test').searchParams.get('symbols')!.split(','));
+  expect(symbols).not.toContain('UNKNOWN');
+});
+
 test('detail quote snapshot loads the whole page once and ignores scroll focus and timers', async ({ page }) => {
   await page.clock.install();
   const state: State = { seen: [], dense: true };
@@ -207,7 +404,7 @@ test('detail quote snapshot loads the whole page once and ignores scroll focus a
   await expect(row.getByTestId('advisory-recommendation-return')).toContainText('+10.00%');
 });
 
-test('detail quote snapshot reuses visited pages and refreshes only the current page', async ({ page }) => {
+test('detail quote snapshot reuses the complete group across pages and refreshes the open groups', async ({ page }) => {
   const state: State = { seen: [], dense: true }; await setup(page, state);
   await page.goto('/paper-v2/advisory?program_id=lstm');
   const list = main(page).locator('section').filter({ has: page.getByRole('heading', { name: '当日推荐名单', exact: true }) }).first();
@@ -216,18 +413,18 @@ test('detail quote snapshot reuses visited pages and refreshes only the current 
   const initial = reads().length;
   await list.getByRole('button', { name: '下一页', exact: true }).click();
   await expect(list.getByTestId('advisory-current-price').first()).toContainText('¥46.40');
-  expect(reads()).toHaveLength(initial + 1);
-  const newSymbols = new URL(reads().at(-1)!.slice(4), 'http://test').searchParams.get('symbols')!.split(',');
-  expect(newSymbols).toEqual(Array.from({ length: 5 }, (_, i) => `600${120 + i}.SH`));
+  expect(reads()).toHaveLength(initial);
+  expect(reads().flatMap(url => new URL(url.slice(4), 'http://test').searchParams.get('symbols')!.split(','))).toContain('600124.SH');
   await list.getByRole('button', { name: '上一页', exact: true }).click();
   await expect(list.getByRole('button', { name: '密集名单 1', exact: true })).toBeVisible();
   await page.waitForTimeout(150);
-  expect(reads()).toHaveLength(initial + 1);
+  expect(reads()).toHaveLength(initial);
   state.quotePrice = 50;
   await main(page).getByRole('button', { name: '刷新行情', exact: true }).click();
   await expect(list.getByTestId('advisory-current-price').first()).toContainText('¥50.00');
-  expect(reads()).toHaveLength(initial + 2);
-  expect(reads().at(-1)).not.toContain('600120.SH');
+  await expect(main(page).getByRole('button', { name: '刷新行情', exact: true })).toBeEnabled();
+  expect(reads()).toHaveLength(initial + 1);
+  expect(reads().at(-1)).toContain('600124.SH');
 });
 
 test('detail quote snapshot coalesces delayed groups without refetching in-flight symbols', async ({ page }) => {
@@ -237,8 +434,8 @@ test('detail quote snapshot coalesces delayed groups without refetching in-fligh
   await expect(main(page).getByRole('button', { name: '刷新行情', exact: true })).toBeEnabled();
   const reads = state.seen.filter(url => url.includes('/returns?'));
   const requested = reads.flatMap(url => new URL(url.slice(4), 'http://test').searchParams.get('symbols')!.split(','));
-  expect(requested).toHaveLength(22);
-  expect(new Set(requested).size).toBe(22);
+  expect(requested).toHaveLength(27);
+  expect(new Set(requested).size).toBe(27);
   expect(requested).toContain('600119.SH'); expect(requested).toContain('600200.SH');
 });
 
