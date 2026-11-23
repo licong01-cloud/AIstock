@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2278",
-  "closed_at": null,
+  "closed_at": "2026-11-23T03:17:36.964941Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -49,15 +49,15 @@
   "expected": "Six enabled programs can render one complete bounded card and deliver once through the existing snapshot, spreadsheet and transport path.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261121_BUG-2278-advisory-aggregate-mobile-delivery-rejects-six-enabled-strategy-programs.json",
       "backend/services/advisory_forward/notification_presentation.py",
-      "backend/tests/advisory_model_first/test_advisory_notification_presentation.py"
+      "backend/tests/advisory_model_first/test_advisory_notification_presentation.py",
+      "tests/aistock_validation/bugs/20261121_BUG-2278-advisory-aggregate-mobile-delivery-rejects-six-enabled-strategy-programs.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261121_BUG-2278-advisory-aggregate-mobile-delivery-rejects-six-enabled-strategy-programs.json",
       "backend/services/advisory_forward/notification_presentation.py",
-      "backend/tests/advisory_model_first/test_advisory_notification_presentation.py"
+      "backend/tests/advisory_model_first/test_advisory_notification_presentation.py",
+      "tests/aistock_validation/bugs/20261121_BUG-2278-advisory-aggregate-mobile-delivery-rejects-six-enabled-strategy-programs.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -109,8 +109,8 @@
   },
   "first_seen_at": "2026-11-21T17:27:54.928836Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "cd9192ac5fe3737a1ee8381b4f6983bd4d855cfb",
+  "fixed_at": "2026-11-21T17:41:47Z",
   "github_issue_number": 7438,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7438",
   "last_seen_at": "2026-11-21T17:27:54.928836Z",
@@ -118,6 +118,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7439",
   "pre_execution_scope_review": {
     "provider_constraint": "https://open.feishu.cn/document/feishu-cards/feishu-card-cardkit/components/table",
     "runtime_hold": "No service control during the replay. Source merge and runtime activation remain separate.",
@@ -187,9 +188,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:/Dev/AIstock/tmp/issue_workflow/BUG-2278/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2278",
+      "business_smoke_semantic": {
+        "contract_id": "scheduler_status",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "e49ea55d85a17e74db97ae002f4da0d40fbf7b0441f6386d5a270dbc76470bf6",
+      "contract_digest": "7b1423491f0f2eea1820be95f724c6e1534b176b7ef4a2e67c186b77309ddb44",
+      "expected_identity": "cd9192ac5fe3737a1ee8381b4f6983bd4d855cfb",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-11-23T03:14:46.484379Z",
+      "mode": "read_only",
+      "observed_identity": "22d71147c1a8c490982fa89db64b907cc3ae9890",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "b141cd7d06a67b23005d26ffbeb276dce595c733276b3e6033802609dc91f016",
+      "receipt_sha256": "feee2a8d8b542c9a35dc5a489986eb19b1a691af707a6893e7a62fbb82c5b2e2",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "fa94a923d182cad0f2c246b908632fa8aa3cf789293b350a2d23566dd36aed8a",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -199,7 +223,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "verified",
   "suspected_modules": [
     "advisory"
   ],
@@ -208,6 +232,9 @@
     "fingerprint": "460d67f65e7938d3085287f9",
     "source_event_id": "FE-20261121-460d67f65e79"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/advisory_model_first/test_advisory_notification_presentation.py backend/tests/advisory_model_first/test_advisory_feishu_sheets.py -q -> 51 passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
