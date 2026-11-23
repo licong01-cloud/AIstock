@@ -5,8 +5,10 @@ import { bps, day, gain, number, text, time } from "./workbench/shared";
 import { QuoteContext as Context, SnapshotQuoteProvider, type Quote, type Quotes } from "./QuoteSnapshot";
 export { QuoteRefresh } from "./QuoteSnapshot";
 
-const canonical = (symbol: string) => symbol.trim().toUpperCase().replace(/^(SH|SZ|BJ)(\d{6})$/, "$2.$1");
-const valid = (symbol: string) => /^\d{6}\.(SH|SZ|BJ)$/.test(canonical(symbol));
+export const canonicalQuoteSymbol = (symbol: string) => symbol.trim().toUpperCase().replace(/^(SH|SZ|BJ)(\d{6})$/, "$2.$1");
+const canonical = canonicalQuoteSymbol;
+export const validQuoteSymbol = (symbol: string) => /^\d{6}\.(SH|SZ|BJ)$/.test(canonical(symbol));
+const valid = validQuoteSymbol;
 const kindText: Record<string, string> = { LIVE: "实时", PAUSED: "午间最新成交", CLOSE: "最近收盘", STALE_CLOSE: "较早收盘", NO_TRADES: "暂无成交快照" };
 const reasonText: Record<string, string> = { CALENDAR_UNAVAILABLE: "交易日历不可用", TDX_TIMEOUT: "TDX行情超时", TDX_PRICE_MISSING: "TDX暂无有效价格", TDX_CLOSE_MISSING: "TDX暂无收盘价", TDX_DUPLICATE_SYMBOL: "TDX代码重复", QUOTE_BUSY: "行情繁忙，稍后重试", RETURN_READ_UNAVAILABLE: "行情或名单身份不可用，请刷新" };
 
