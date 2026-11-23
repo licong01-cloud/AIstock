@@ -3,6 +3,8 @@ from __future__ import annotations
 import datetime as dt
 from contextlib import nullcontext
 from concurrent.futures import Future
+import io
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -304,6 +306,61 @@ def test_submit_ingestion_routes_adj_factor_to_dedicated_reconciliation_script(
     assert Path(command[1]).name == "ingest_tushare_adj_factor.py"
     assert _argument_value(command, "--mode") == "incremental"
     assert _argument_value(command, "--job-id") == "job-1"
+
+
+def test_market_size_adj_factor_repair_uses_stdin_end_to_end(monkeypatch):
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    scheduler._executor = _Executor()
+    scheduler._tracker = _Tracker()
+    scheduler._execute = Mock()
+    scheduler._log_ingestion_run = Mock()
+    scheduler._record_refresh_audit_from_table_range = Mock()
+    symbols = [f"{600000 + i:06d}.SH" for i in range(5224)]
+    job_id = "c197fd66-9de8-4e0c-a994-f774a42a89e7"
+    scheduler._submit_ingestion(
+        schedule_id=None, dataset="adj_factor", mode="incremental", triggered_by="data_sync_target_due",
+        options={"history_reconcile_symbol": symbols, "job_id": job_id,
+                 "start_date": "2026-11-23", "end_date": "2026-11-23"},
+    )
+    function, args = scheduler._executor.submissions[0]
+    cmd, stdin_text = args[-2:]
+    assert "--history-reconcile-symbols-stdin" in cmd
+    assert "--history-reconcile-symbol" not in cmd
+    assert len(subprocess.list2cmdline(cmd)) < 32767
+    assert json.loads(stdin_text) == symbols
+
+    # Launch the actual parser in a fresh OS process without invoking its DB writer.
+    real_run = subprocess.run
+    child = (
+        "import json; from scripts.ingest_tushare_adj_factor import parse_args; "
+        "a = parse_args(); print(json.dumps([a.history_reconcile_symbol, a.start_date, a.end_date, a.job_id]))"
+    )
+    calls = []
+
+    def launch(command, **kwargs):
+        assert command == cmd
+        process = real_run([command[0], "-c", child, *command[2:]], timeout=20, **kwargs)
+        calls.append(process)
+        return process
+
+    monkeypatch.setattr(subprocess, "run", launch)
+    function(*args)
+
+    assert len(calls) == 1
+    assert calls[0].returncode == 0, calls[0].stderr
+    assert json.loads(calls[0].stdout) == [symbols, "2026-11-23", "2026-11-23", job_id]
+    scheduler._record_refresh_audit_from_table_range.assert_called_once()
+
+
+@pytest.mark.parametrize("payload", ["", "[]", "{}", '[" "]', "[1]"])
+def test_invalid_stdin_scope_never_becomes_a_whole_market_run(monkeypatch, payload):
+    monkeypatch.setattr(sys, "argv", ["adj_factor", "--mode", "incremental", "--history-reconcile-symbols-stdin"])
+    monkeypatch.setattr(sys, "stdin", io.StringIO(payload))
+
+    with pytest.raises(SystemExit) as error:
+        ingest_adj_factor.parse_args()
+
+    assert error.value.code == 2
 
 
 def test_incremental_adj_factor_scheduler_passes_optional_history_controls() -> None:
