@@ -112,11 +112,17 @@ def parse_args() -> argparse.Namespace:
         default=int(os.getenv("ADJ_FACTOR_HISTORY_MAX_PAGES", "4")),
         help="Maximum backward pages for provider-limited long histories",
     )
-    parser.add_argument(
+    scope = parser.add_mutually_exclusive_group()
+    scope.add_argument(
         "--history-reconcile-symbol",
         action="append",
         default=None,
         help="Limit reconciliation to one symbol; repeat only for controlled diagnostics",
+    )
+    scope.add_argument(
+        "--history-reconcile-symbols-stdin",
+        action="store_true",
+        help="Read the exact incremental repair scope as a JSON array from standard input",
     )
     parser.add_argument(
         "--history-reconcile-dry-run",
@@ -128,7 +134,20 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Ignored placeholder; kept for compatibility with scheduler default args",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.history_reconcile_symbols_stdin:
+        if args.mode != "incremental":
+            parser.error("--history-reconcile-symbols-stdin requires incremental mode")
+        try:
+            symbols = json.load(sys.stdin)
+        except (json.JSONDecodeError, OSError):
+            parser.error("invalid JSON for the adj_factor repair scope")
+        if not isinstance(symbols, list) or not symbols or any(
+            not isinstance(symbol, str) or not symbol.strip() for symbol in symbols
+        ):
+            parser.error("adj_factor repair scope must be a non-empty array of stock codes")
+        args.history_reconcile_symbol = symbols
+    return args
 
 
 def _date_range(d0: dt.date, d1: dt.date) -> List[dt.date]:

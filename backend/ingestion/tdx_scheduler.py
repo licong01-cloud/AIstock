@@ -2471,7 +2471,22 @@ class TDXScheduler:
         # TushareSyncEngine path.
         elif ds_lower == "adj_factor":
             cmd_opts = options.copy()
+            stdin_payload = ()
+            symbols = cmd_opts.get("history_reconcile_symbol")
+            if (
+                mode_lower == "incremental"
+                and symbols is not None
+                and not cmd_opts.get("args")
+                and Path(cmd_opts.get("script") or DEFAULT_INGEST_TUSHARE_ADJ_FACTOR).resolve()
+                == DEFAULT_INGEST_TUSHARE_ADJ_FACTOR.resolve()
+            ):
+                cmd_opts.pop("history_reconcile_symbol")
+                if not isinstance(symbols, (list, tuple)):
+                    symbols = [symbols]
+                stdin_payload = (json.dumps(symbols),)
             cmd = self._build_ingestion_command(dataset, mode, cmd_opts)
+            if stdin_payload:
+                cmd.append("--history-reconcile-symbols-stdin")
             future = self._executor.submit(
                 self._run_ingestion_process,
                 run_id,
@@ -2480,6 +2495,7 @@ class TDXScheduler:
                 mode,
                 triggered_by,
                 cmd,
+                *stdin_payload,
             )
         # Route engine-supported datasets through TushareSyncEngine
         elif ds_lower in _ENGINE_DATASETS and not options.get("script"):
@@ -5589,6 +5605,7 @@ class TDXScheduler:
         mode: str,
         triggered_by: str,
         cmd: List[str],
+        stdin_text: Optional[str] = None,
     ) -> None:
         start_ts = _now()
         log_lines: List[str] = []
@@ -5606,7 +5623,10 @@ class TDXScheduler:
         except Exception as exc:
             _logger.error("unexpected error: %s", exc)
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, check=False, encoding="utf-8", errors="replace")
+            proc = subprocess.run(
+                cmd, input=stdin_text, capture_output=True, text=True,
+                check=False, encoding="utf-8", errors="replace",
+            )
             log_lines.append(proc.stdout)
             log_lines.append(proc.stderr)
             status = "success" if proc.returncode == 0 else "failed"
