@@ -402,7 +402,9 @@ def _resume_checkpoint(conn, end_date: dt.date, job_id) -> Dict[str, Any]:
             "collection_started_at": checkpoint.get("collection_started_at")}
 
 
-def _record_history_state(conn, day: dt.date, status: str, *, failures=(), job_id=None) -> None:
+def _record_history_state(
+    conn, day: dt.date, status: str | None, *, failures=(), job_id=None, recovered_symbols=(),
+) -> None:
     """Reuse the existing partition metadata; no extra table or success authority."""
     from backend.services.data_integrity.repository import schema_installed, enqueue_validation, IntegrityRepository
     if not schema_installed(conn):
@@ -411,14 +413,28 @@ def _record_history_state(conn, day: dt.date, status: str, *, failures=(), job_i
     if previous:
         conn.autocommit = False
     try:
-        IntegrityRepository().ensure_partition(conn, "adj_factor", day)
-        value = {"status": status, "end_date": day.isoformat(), "job_id": str(job_id),
-                 "failed_symbols": sorted({f["symbol"] for f in failures})}
+        if status is not None:
+            IntegrityRepository().ensure_partition(conn, "adj_factor", day)
         with conn.cursor() as cur:
             cur.execute("""SELECT metadata->'adj_factor_history' FROM market.dataset_date_refresh_audit
                 WHERE dataset='adj_factor' AND trade_date=%s AND data_source='canonical_db' FOR UPDATE""", (day,))
             row = cur.fetchone()
             previous_value = (row[0] if row else None) or {}
+            if status is None:
+                blocked = set(previous_value.get("failed_symbols", ()))
+                verified = blocked.intersection(recovered_symbols)
+                if previous_value.get("status") != "PARTIAL" or not verified:
+                    conn.commit()
+                    return
+                cur.execute("""SELECT ts_code FROM market.adj_factor WHERE trade_date=%s
+                    AND ts_code=ANY(%s) AND adj_factor>0 AND adj_factor<'Infinity'::double precision""",
+                    (day, sorted(verified)))
+                blocked.difference_update(code for (code,) in cur.fetchall())
+                value = {**previous_value, "status": "PARTIAL" if blocked else "COMPLETE",
+                         "job_id": str(job_id), "failed_symbols": sorted(blocked)}
+            else:
+                value = {"status": status, "end_date": day.isoformat(), "job_id": str(job_id),
+                         "failed_symbols": sorted({f["symbol"] for f in failures})}
             if all(previous_value.get(key) == value[key] for key in ("status", "end_date", "failed_symbols")):
                 conn.commit()
                 return
@@ -497,9 +513,13 @@ def run_history_ingestion(conn, args, job_id, end_date: dt.date) -> Dict[str, An
             receipt["collection_started_at"] = collection_started_at
             receipt["collection_finished_at"] = dt.datetime.now(dt.timezone.utc).isoformat()
             receipt["source_observation_policy"] = "per_security_stable_reads_same_collection_checkpoints"
-            if full_scope and not dry_run:
-                _record_history_state(conn, end_date, "PARTIAL" if receipt["failures"] else "COMPLETE",
-                                      failures=receipt["failures"], job_id=job_id)
+            if not dry_run:
+                if full_scope:
+                    _record_history_state(conn, end_date, "PARTIAL" if receipt["failures"] else "COMPLETE",
+                                          failures=receipt["failures"], job_id=job_id)
+                elif receipt["completed_symbols"]:
+                    _record_history_state(conn, end_date, None, job_id=job_id,
+                                          recovered_symbols=receipt["completed_symbols"])
             return receipt
         except Exception:
             if latest and not dry_run:

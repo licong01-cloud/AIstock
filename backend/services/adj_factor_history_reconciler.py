@@ -14,6 +14,7 @@ any persistent row is changed.
 from __future__ import annotations
 
 import datetime as dt
+from bisect import bisect_left
 from contextlib import contextmanager
 import threading
 import time
@@ -74,6 +75,8 @@ class AdjFactorHistoryRepository(Protocol):
     def load_snapshot(self, symbol: str, *, end_date: dt.date) -> AdjFactorSnapshot: ...
 
     def load_price_dates(self, symbol: str, *, end_date: dt.date) -> frozenset[dt.date]: ...
+
+    def load_full_day_suspensions(self, symbol: str, *, dates: Sequence[dt.date]) -> frozenset[dt.date]: ...
 
     def begin_stage(self) -> None: ...
 
@@ -339,26 +342,39 @@ def _first_difference(local: AdjFactorSnapshot, provider: AdjFactorSnapshot) -> 
     return changed[0], changed[-1]
 
 
+def _matches_stored_factor(local_value: Decimal, source_value: Decimal) -> bool:
+    # A legacy value stored at three decimals represents a half-tick interval.
+    # Accept either tie direction and preserve the existing bytes.
+    return local_value == source_value or (
+        1000 % local_value.as_integer_ratio()[1] == 0
+        and abs(local_value - source_value) <= Decimal("0.0005")
+    )
+
+
 def _retain_nontrading_rows(
     local: AdjFactorSnapshot,
     provider: AdjFactorSnapshot,
     *,
     traded_price_dates: frozenset[dt.date],
     delist_date: dt.date | None,
+    load_full_day_suspensions: Callable[[Sequence[dt.date]], frozenset[dt.date]],
 ) -> tuple[AdjFactorSnapshot, tuple[AdjFactorRow, ...], tuple[AdjFactorRow, ...]]:
-    """Preserve bounded omissions and legacy rows outside a closed listing.
+    """Keep existing nontrading facts when their factor is corroborated.
 
-    Tushare occasionally omits an adj-factor row for a suspended open-market
-    date even though an earlier daily pull persisted that row.  Such a row is
-    safe to retain only when it has no traded price and its value is identical
-    to the nearest current-provider values on both sides.  A confirmed
-    post-delisting omission is outside that check. Preserve its local bytes
-    in the materialized history so reconciliation cannot delete or rebase it.
+    Both source boundaries must be present. A legacy carry is supported when
+    the local pre-gap factor agrees with the carried value and the source at
+    stored precision. If the source changes across the gap, the local post-gap
+    factor must corroborate the new value at stored precision. A recorded full-day
+    suspension also permits an exact match to either source boundary. Positive
+    trade evidence always takes precedence. Post-delisting rows retain their
+    separate lifecycle treatment.
     """
 
     provider_values = {row.trade_date: row.value for row in provider.rows}
     provider_dates = tuple(sorted(provider_values))
+    local_values = {row.trade_date: row.value for row in local.rows}
     retained: list[AdjFactorRow] = []
+    needs_suspension: list[AdjFactorRow] = []
     post_delist: list[AdjFactorRow] = []
     for row in local.rows:
         if row.trade_date in provider_values:
@@ -370,18 +386,38 @@ def _retain_nontrading_rows(
         if delist_date is not None and row.trade_date > delist_date:
             post_delist.append(row)
             continue
-        before = next((day for day in reversed(provider_dates) if day < row.trade_date), None)
-        after = next((day for day in provider_dates if day > row.trade_date), None)
-        if (
-            before is None
-            or after is None
-            or provider_values[before] != row.value
-            or provider_values[after] != row.value
-        ):
-            raise AdjFactorHistoryReconcileError(
-                f"{local.symbol}: provider history omits an unbounded or changed nontrading date {row.trade_date}"
-            )
-        retained.append(row)
+        index = bisect_left(provider_dates, row.trade_date)
+        if 0 < index < len(provider_dates):
+            before, after = provider_dates[index - 1], provider_dates[index]
+            source_before, source_after = provider_values[before], provider_values[after]
+            if source_before == row.value == source_after:
+                retained.append(row)
+                continue
+            local_before, local_after = local_values.get(before), local_values.get(after)
+            if (
+                local_before is not None
+                and _matches_stored_factor(row.value, local_before)
+                and _matches_stored_factor(row.value, source_before)
+                and (source_before == source_after
+                     or (local_after is not None and _matches_stored_factor(local_after, source_after)))
+            ):
+                retained.append(row)
+                continue
+            if row.value in (source_before, source_after):
+                needs_suspension.append(row)
+                continue
+        raise AdjFactorHistoryReconcileError(
+            f"{local.symbol}: provider history omits an unbounded or changed nontrading date {row.trade_date}"
+        )
+    if needs_suspension:
+        suspended = load_full_day_suspensions([row.trade_date for row in needs_suspension])
+        for row in needs_suspension:
+            if row.trade_date not in suspended:
+                raise AdjFactorHistoryReconcileError(
+                    f"{local.symbol}: provider history omits an unbounded or changed nontrading date {row.trade_date}"
+                )
+            retained.append(row)
+    retained.sort(key=lambda row: row.trade_date)
     if not retained and not post_delist:
         return provider, (), ()
     return (
@@ -620,12 +656,23 @@ class PostgresAdjFactorHistoryRepository:
                 SELECT trade_date
                 FROM market.kline_daily_raw
                 WHERE ts_code = %s AND trade_date <= %s
-                  AND (volume_hand > 0 OR amount_li > 0)
+                  AND (volume_hand > 0 OR volume_shares > 0 OR amount_li > 0)
                 ORDER BY trade_date
                 """,
                 (symbol, end_date),
             )
             return frozenset(row[0] for row in cur.fetchall())
+
+    def load_full_day_suspensions(self, symbol: str, *, dates: Sequence[dt.date]) -> frozenset[dt.date]:
+        from backend.data_service.suspension_day_authority import full_day_keys
+
+        with self.conn.cursor(cursor_factory=pgx.RealDictCursor) as cur:
+            cur.execute(
+                """SELECT ts_code, trade_date, suspend_type, suspend_timing
+                   FROM market.suspend_d WHERE ts_code = %s AND trade_date = ANY(%s)""",
+                (symbol, list(dates)),
+            )
+            return frozenset(day for code, day in full_day_keys(cur.fetchall(), required_dates=dates) if code == symbol)
 
     def begin_stage(self) -> None:
         with self.conn.cursor() as cur:
@@ -918,7 +965,8 @@ class AdjFactorHistoryReconciler:
     ) -> dict[str, Any]:
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
-        self.repository.begin_stage()
+        if not dry_run:
+            self.repository.begin_stage()
         changes: list[dict[str, Any]] = []
         expected_local: dict[str, str] = {}
         expected_rows: dict[str, int] = {}
@@ -986,6 +1034,9 @@ class AdjFactorHistoryReconciler:
                         combined,
                         traded_price_dates=traded_price_dates,
                         delist_date=delist_date,
+                        load_full_day_suspensions=lambda dates: self.repository.load_full_day_suspensions(
+                            scope.symbol, dates=dates,
+                        ),
                     )
                     provider_dates = {row.trade_date for row in provider.rows}
                     missing_prices = sorted(traded_price_dates - provider_dates)
@@ -1039,7 +1090,8 @@ class AdjFactorHistoryReconciler:
                     local_dates = {row.trade_date for row in local.rows}
                     historical_coverage_extended = bool(local.rows) and any(
                         row.trade_date <= local.last_date and row.trade_date not in local_dates for row in provider.rows)
-                    self.repository.stage_rows(staged_rows)
+                    if not dry_run:
+                        self.repository.stage_rows(staged_rows)
                     expected_local[scope.symbol] = local.canonical_sha256
                     expected_rows[scope.symbol] = len(staged_rows)
                     changes.append(

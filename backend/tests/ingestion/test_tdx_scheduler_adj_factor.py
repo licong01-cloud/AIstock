@@ -72,7 +72,8 @@ def test_exact_factor_repair_cannot_fall_back_to_the_whole_market():
             retry_mode="incremental", triggered_by="unit", attempt=1)
 
 
-def test_exact_factor_repair_uses_only_current_named_supported_gaps():
+@pytest.mark.parametrize("classification", ["MISSING", "HISTORY_CONFLICT"])
+def test_exact_factor_repair_uses_only_current_named_supported_gaps(classification):
     scheduler = object.__new__(TDXScheduler)
     queries = []
     def fetch(query, params):
@@ -83,7 +84,7 @@ def test_exact_factor_repair_uses_only_current_named_supported_gaps():
                 {"ts_code": "600001.SH", "collectable": True, "retired_on_date": True},
             ]
         return [{"data_revision": 3, "validated_revision": 3, "validation_status": "INCOMPLETE",
-                 "validation": {"gaps": [{"classification": "MISSING",
+                 "validation": {"gaps": [{"classification": classification,
                      "symbols": ["000001.SZ", "000001.SZ", "600001.SH", "920001.BJ"]}]}}]
     scheduler._fetchall = fetch
     target = {"target_date": dt.date(2018, 8, 8)}
@@ -178,6 +179,41 @@ def test_named_retry_passes_the_target_date_and_protects_the_newer_local_suffix(
     assert reconcile.call_args.kwargs["scope_date"] == target_day
     assert reconcile.call_args.kwargs["end_date"] == latest_day
     assert reconcile.call_args.kwargs["symbols"] == ["600001.SH"]
+
+
+@pytest.mark.parametrize("other_failures", [[], ["600001.SH", "600002.SH"]])
+def test_named_history_receipt_clears_only_previously_blocked_symbols_present_on_the_target_day(
+    monkeypatch, other_failures,
+):
+    import backend.services.data_integrity.repository as integrity
+
+    day = dt.date(2026, 11, 23)
+    cursor = Mock()
+    conn = Mock(autocommit=True)
+    conn.cursor.return_value = nullcontext(cursor)
+    cursor.fetchone.return_value = ({
+        "status": "PARTIAL", "end_date": day.isoformat(), "job_id": "previous",
+        "failed_symbols": ["600000.SH", *other_failures],
+    },)
+    cursor.fetchall.return_value = [("600000.SH",)]
+    monkeypatch.setattr(integrity, "schema_installed", lambda _conn: True)
+    enqueue = Mock()
+    monkeypatch.setattr(integrity, "enqueue_validation", enqueue)
+
+    ingest_adj_factor._record_history_state(
+        conn, day, None, job_id="repair", recovered_symbols=["600000.SH", "600001.SH", "600003.SH"],
+    )
+
+    assert cursor.execute.call_args_list[1].args[1] == (day, sorted({"600000.SH", "600001.SH"} & {
+        "600000.SH", *other_failures,
+    }))
+    new_metadata = json.loads(cursor.execute.call_args_list[2].args[1][0])
+    assert new_metadata == {
+        "status": "PARTIAL" if other_failures else "COMPLETE",
+        "end_date": day.isoformat(), "job_id": "repair", "failed_symbols": other_failures,
+    }
+    enqueue.assert_called_once_with(conn, "adj_factor", day)
+    conn.commit.assert_called_once()
 
 
 def test_existing_factor_job_preserves_scheduler_target_identity():

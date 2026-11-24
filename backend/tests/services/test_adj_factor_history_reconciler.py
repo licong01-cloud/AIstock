@@ -50,6 +50,7 @@ class _Repository:
         self.snapshots = snapshots
         self.price_dates = price_dates
         self.delist_dates = delist_dates or {}
+        self.full_day_suspensions: frozenset[dt.date] = frozenset()
         self.staged: dict[str, AdjFactorSnapshot] = {}
         self.apply_calls = 0
         self.basis_normalizations: list[dict[str, Any]] = []
@@ -67,6 +68,9 @@ class _Repository:
 
     def load_price_dates(self, symbol: str, *, end_date: dt.date) -> frozenset[dt.date]:
         return self.price_dates[symbol]
+
+    def load_full_day_suspensions(self, symbol: str, *, dates: Sequence[dt.date]) -> frozenset[dt.date]:
+        return self.full_day_suspensions.intersection(dates)
 
     def begin_stage(self) -> None:
         self.staged.clear()
@@ -421,6 +425,62 @@ def test_reconcile_retains_only_a_bounded_nontrading_source_omission() -> None:
         {"symbol": symbol, "trade_date": DAY_2.isoformat(), "adj_factor": "3.094"}
     ]
     assert repository.apply_calls == 0
+
+
+def test_reconcile_preserves_a_legacy_carry_across_a_source_precision_upgrade() -> None:
+    symbol = "000156.SZ"
+    target_day = DAY_3 + dt.timedelta(days=3)
+    local = _snapshot(symbol, _rows(symbol, [(DAY_1, "1.007"), (DAY_2, "1.007"), (DAY_3, "0.969")]))
+    provider_rows = _provider_rows(symbol, [(DAY_1, "1.0069"), (DAY_3, "0.9695"), (target_day, "0.9695")])
+    repository = _Repository({symbol: local}, {symbol: frozenset({DAY_1, DAY_3, target_day})})
+    reconciler = _reconciler(repository, _SequencedProvider({symbol: [provider_rows]}))
+
+    first = reconciler.reconcile(end_date=target_day, symbols=[symbol], scope_date=target_day, independent=True)
+    repeated = reconciler.reconcile(end_date=target_day, symbols=[symbol], scope_date=target_day, independent=True)
+
+    assert first["failures"] == repeated["failures"] == []
+    assert first["retained_nontrading_row_count"] == repeated["retained_nontrading_row_count"] == 1
+    assert repository.snapshots[symbol].rows == _rows(
+        symbol, [(DAY_1, "1.0069"), (DAY_2, "1.007"), (DAY_3, "0.9695"), (target_day, "0.9695")],
+    )
+    assert repository.apply_calls == 1
+    assert repeated["status"] == "unchanged"
+
+
+def test_reconcile_preserves_rounded_carry_when_both_source_boundaries_confirm_one_value() -> None:
+    symbol = "000545.SZ"
+    local = _snapshot(symbol, _rows(symbol, [(DAY_1, "1.701"), (DAY_2, "1.701"), (DAY_3, "2.2112")]))
+    provider_rows = _provider_rows(symbol, [(DAY_1, "1.7006"), (DAY_3, "1.7006")])
+    repository = _Repository({symbol: local}, {symbol: frozenset({DAY_1, DAY_3})})
+    reconciler = _reconciler(repository, _SequencedProvider({symbol: [provider_rows]}))
+
+    receipt = reconciler.reconcile(end_date=DAY_3, independent=True)
+
+    assert receipt["failures"] == []
+    assert repository.snapshots[symbol].rows == _rows(
+        symbol, [(DAY_1, "1.7006"), (DAY_2, "1.701"), (DAY_3, "1.7006")],
+    )
+    assert receipt["downstream_invalidation"]["instruments"] == [symbol]
+
+
+@pytest.mark.parametrize("confirmed", [True, False])
+def test_reconcile_requires_full_day_evidence_for_a_carry_only_correlated_to_the_new_trade(confirmed: bool) -> None:
+    symbol = "600567.SH"
+    local = _snapshot(symbol, _rows(symbol, [(DAY_1, "4.2141"), (DAY_2, "4.2141")]))
+    provider_rows = _provider_rows(symbol, [(DAY_1, "4.2138"), (DAY_3, "4.2141")])
+    repository = _Repository({symbol: local}, {symbol: frozenset({DAY_1, DAY_3})})
+    if confirmed:
+        repository.full_day_suspensions = frozenset({DAY_2})
+    reconciler = _reconciler(repository, _SequencedProvider({symbol: [provider_rows]}))
+
+    receipt = reconciler.reconcile(end_date=DAY_3, independent=True)
+
+    if confirmed:
+        assert receipt["failed_symbols"] == []
+        assert repository.snapshots[symbol].rows[1] == local.rows[1]
+    else:
+        assert receipt["failed_symbols"] == [symbol]
+        assert repository.apply_calls == 0
 
 
 def test_reconcile_rejects_an_unbounded_nontrading_source_omission() -> None:
