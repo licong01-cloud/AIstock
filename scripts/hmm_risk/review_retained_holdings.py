@@ -38,6 +38,34 @@ def checked(frame, columns, key):
     return data
 
 
+def warning_map(warnings):
+    predictions = {}
+    if warnings is not None:
+        w = checked(warnings, PRED, ["date", "code"])
+        for flag, probability in (("M0", "p0"), ("M1", "p1")):
+            values = pd.to_numeric(w[probability], errors="raise")
+            if not w[flag].dropna().map(lambda v: isinstance(v, (bool, np.bool_))).all():
+                raise ValueError(f"invalid {flag} flag")
+            if not values.dropna().between(0, 1).all() or not values.isna().equals(w[flag].isna()):
+                raise ValueError(f"invalid or incomplete {flag} probability/flag pair")
+            w[probability] = values
+        if not w.effective.gt(w.date).all():
+            raise ValueError("warning must apply after the decision")
+        predictions = {(row.date, row.code): row for row in w.itertuples()}
+    return predictions
+
+
+def warning_fields(predictions, date, effective, code):
+    prediction = predictions.get((date, code))
+    if prediction is not None:
+        if prediction.effective != effective:
+            raise ValueError(f"warning effective date mismatch on {date} for {code}")
+        present = int(pd.notna(prediction.p0)) + int(pd.notna(prediction.p1))
+        return dict(M0=prediction.M0, M1=prediction.M1, p0=prediction.p0,
+                    p1=prediction.p1, warning_status=("UNAVAILABLE", "PARTIAL", "AVAILABLE")[present])
+    return {"warning_status": "UNAVAILABLE"}
+
+
 def review(days, stocks, warnings=None):
     """Pick the largest expected retained amount; break ties by industry code."""
     days = checked(days, DAYS, DAY)
@@ -59,19 +87,7 @@ def review(days, stocks, warnings=None):
     by_day = {key: rows for key, rows in stocks.groupby(DAY, sort=False)}
     if by_day.keys() - set(days[DAY].itertuples(index=False, name=None)):
         raise ValueError("stocks refer to an unknown account day")
-    predictions = {}
-    if warnings is not None:
-        w = checked(warnings, PRED, ["date", "code"])
-        for flag, probability in (("M0", "p0"), ("M1", "p1")):
-            values = pd.to_numeric(w[probability], errors="raise")
-            if not w[flag].dropna().map(lambda v: isinstance(v, (bool, np.bool_))).all():
-                raise ValueError(f"invalid {flag} flag")
-            if not values.dropna().between(0, 1).all() or not values.isna().equals(w[flag].isna()):
-                raise ValueError(f"invalid or incomplete {flag} probability/flag pair")
-            w[probability] = values
-        if not w.effective.gt(w.date).all():
-            raise ValueError("warning must apply after the decision")
-        predictions = {(row.date, row.code): row for row in w.itertuples()}
+    predictions = warning_map(warnings)
 
     output = []
     for day in days.sort_values(DAY).itertuples():
@@ -95,13 +111,7 @@ def review(days, stocks, warnings=None):
                           retained_value=retained, nav_weight_pct=100 * retained / day.nav,
                           stocks="|".join(sorted(members.loc[members.retained_value.gt(0), "stock"])),
                           warning_status="UNAVAILABLE")
-            prediction = predictions.get((day.date, code))
-            if prediction is not None:
-                if prediction.effective != day.effective:
-                    raise ValueError(f"warning effective date mismatch on {day.date} for {code}")
-                present = int(pd.notna(prediction.p0)) + int(pd.notna(prediction.p1))
-                result.update(M0=prediction.M0, M1=prediction.M1, p0=prediction.p0,
-                              p1=prediction.p1, warning_status=("UNAVAILABLE", "PARTIAL", "AVAILABLE")[present])
+            result.update(warning_fields(predictions, day.date, day.effective, code))
         output.append(result)
     return pd.DataFrame(output, columns=RESULT)
 
