@@ -49,7 +49,8 @@ def test_frozen_seed_ensemble_distinguishes_decision_date_from_cutoff(monkeypatc
     leg = SimpleNamespace(leg_id="LSTM", seed_run_ids=seeds,
                           model_asset=SimpleNamespace(model_id="frozen"), parent_package_id="parent")
     monkeypatch.setattr(multi_alpha_live, "_seed_leg_slices", lambda _: [
-        SimpleNamespace(seed_run_ids=(seed,)) for seed in seeds
+        SimpleNamespace(seed_run_ids=(seed,), model_asset=SimpleNamespace(sha256=digit * 64))
+        for seed, digit in zip(seeds, ("a", "b"), strict=True)
     ])
 
     def live_result(seed):

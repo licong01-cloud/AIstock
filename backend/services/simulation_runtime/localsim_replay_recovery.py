@@ -464,7 +464,10 @@ class LocalSimReplayRecoveryService:
                     or completed != job["completed_trade_date"] or next_day >= source.current_trading_date):
                 self._invalid("LOCALSIM_REPLAY_RECOVERY_SOURCE_IDENTITY_CONFLICT")
             if run is None:
-                native.update(self._inspect_preselection(snapshot, archive_ref=archive_ref))
+                if archive_ref is None:
+                    native.update(self._inspect_preselection(snapshot))
+                else:
+                    native.update(self._inspect_preselection(snapshot, archive_ref=archive_ref))
             elif archive_ref is not None or run["status"] != "FAILED_RETRYABLE" or run["broker_backend"] != "local_sim":
                 self._invalid("LOCALSIM_REPLAY_RECOVERY_DAILY_RUN_INVALID")
             if run is None:
