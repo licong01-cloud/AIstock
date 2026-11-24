@@ -115,8 +115,8 @@
   },
   "first_seen_at": "2026-11-24T16:52:17.185250Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "74a590d4827d0b25da9963af2e6cdf1a8768eade",
+  "fixed_at": "2026-11-24T17:20:34Z",
   "github_issue_number": 7463,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7463",
   "last_seen_at": "2026-11-24T16:52:17.185250Z",
@@ -124,6 +124,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7465",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -148,6 +149,7 @@
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
     "post_restart_note": "After the user reloads backend-main, verify the merged runtime identity and QE archive health. Verify the native absolute-target composer binds the bounded day and minute executors for the frozen release cutoff while leaving intra-release accounts intact. Read back the original run mapping and terminal session ledger and archive receipts from the existing recovery. A second recovery budget is unnecessary.",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -159,7 +161,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2284",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "366b7fe07ffcde32",
+    "recorded_at": "2026-11-24T17:22:12.516421Z",
+    "runtime_contract_digest": "7e566e34089b329cf71fc329d390e789019c7e3cf6ad0e6b1b910a736e01a7c6",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "dca2596ce46dcaff9318e8a7f53ec09787317350",
+    "source_merge_commit": "74a590d4827d0b25da9963af2e6cdf1a8768eade",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7465",
+    "validation_evidence": [
+      "python -m nox -s l0 -- backend/services/quantevolver/absolute_target_consumer.py backend/services/quantevolver/terminal_replay_consumer.py backend/tests/quantevolver/test_qe_absolute_target_consumer.py tests/aistock_validation/bugs/20261124_BUG-2284-qe.json -> passed",
+      "python -m pytest -q backend/tests/quantevolver/test_qe_absolute_target_consumer.py backend/tests/quantevolver/test_qe_terminal_replay.py -> 49 passed"
+    ],
+    "validation_evidence_digest": "b8aba9a1f96612acf400333b44c9104e1a1c7ee1a4de1f614e1336f58565a3dd"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -168,6 +192,10 @@
     "fingerprint": "c4086b2665a03e9f8d65148b",
     "source_event_id": "FE-20261124-c4086b2665a0"
   },
+  "validation_evidence": [
+    "python -m nox -s l0 -- backend/services/quantevolver/absolute_target_consumer.py backend/services/quantevolver/terminal_replay_consumer.py backend/tests/quantevolver/test_qe_absolute_target_consumer.py tests/aistock_validation/bugs/20261124_BUG-2284-qe.json -> passed",
+    "python -m pytest -q backend/tests/quantevolver/test_qe_absolute_target_consumer.py backend/tests/quantevolver/test_qe_terminal_replay.py -> 49 passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
