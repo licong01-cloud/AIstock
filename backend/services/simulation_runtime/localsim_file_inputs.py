@@ -53,11 +53,14 @@ def capture_file_input_worker(function, *, worker_id):
     from .localsim_input_source_plan import current_source_day, current_source_plan, localsim_plan_inputs
     plan = current_source_plan()
     if plan is not None:
+        from .localsim_replay_recovery import current_localsim_evidence_resume, localsim_evidence_resume_scope
+
         plan, trade_date = deepcopy(plan), current_source_day()
+        recovery = deepcopy(current_localsim_evidence_resume())
 
         @wraps(function)
         def planned_worker(*args, **kwargs):
-            with localsim_plan_inputs(plan, trade_date=trade_date):
+            with localsim_plan_inputs(plan, trade_date=trade_date), localsim_evidence_resume_scope(recovery):
                 return function(*args, **kwargs)
         return planned_worker
     dataset = current_file_dataset()

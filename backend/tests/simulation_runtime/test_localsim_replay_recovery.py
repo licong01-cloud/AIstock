@@ -7,7 +7,8 @@ import pytest
 
 from backend.services.simulation_runtime.localsim_replay import local_sim_calendar_snapshot_sha256
 from backend.services.simulation_runtime.localsim_replay_recovery import (
-    ECONOMIC_TABLES, RECOVERY_KEY, LocalSimReplayRecoverRequestV1, LocalSimReplayRecoveryService,
+    ECONOMIC_TABLES, JSONB_EVIDENCE_RECOVERY_REASON, JSONB_LIMIT_MESSAGE, RECOVERY_KEY,
+    LocalSimReplayRecoverRequestV1, LocalSimReplayRecoveryService,
     recovery_rebuild_receipt, require_no_economic_effects, validate_replay_recovery_check,
 )
 from backend.services.simulation_runtime.models import canonical_json_sha256, SimulationBrokerBackend, SimulationDailyRunStatus
@@ -225,13 +226,44 @@ def test_saved_pit_recovery_preserves_identity_and_failure_boundaries(fault):
     assert not service.inspect("replay-original").ready
 
 
+_OLD_JSONB_MESSAGE = JSONB_LIMIT_MESSAGE + "\nLINE 8: ..." + "f" * 44 + "', '{\"schema_..."
+_FAILED_ARCHIVE_REF = "a" * 64 + "/lsselection_" + "b" * 32 + "/" + "c" * 64
+
+
+@pytest.mark.parametrize("fault,reason", [
+    ("unknown_error", "FAILURE_UNSUPPORTED"), ("wrong_day", "FAILURE_UNSUPPORTED"),
+    ("economic_effect", "ECONOMIC_FACTS_PRESENT"), ("missing_ref", "ARCHIVE_REQUIRED"),
+    ("unplanned_source", "SOURCE_IDENTITY_CONFLICT"),
+])
+def test_jsonb_recovery_requires_known_insert_no_economics_and_bound_archive(fault, reason):
+    snapshot = _preselection_snapshot()
+    job = snapshot["job"]
+    job.update(failure_code="ProgramLimitExceeded")
+    job["failure_context"]["message"] = _OLD_JSONB_MESSAGE
+    ref = _FAILED_ARCHIVE_REF
+    if fault == "unknown_error":
+        job["failure_context"]["message"] = JSONB_LIMIT_MESSAGE + "\nLINE 8: another SQL statement"
+    elif fault == "wrong_day":
+        job["failure_context"]["trade_date"] = "2026-01-20"
+    elif fault == "economic_effect":
+        snapshot["economic_counts"]["fills"] = 1
+    elif fault == "missing_ref":
+        ref = None
+    service, calls = _service(snapshot)
+    check = service.inspect(job["replay_job_id"], archive_ref=ref)
+    assert not check.ready and check.reason_codes == ["LOCALSIM_REPLAY_RECOVERY_" + reason]
+    assert not calls
+
+
 @pytest.mark.skipif(os.getenv("AISTOCK_DEV_DB_E2E") != "1", reason="guarded existing DEV database only")
 @pytest.mark.parametrize("failure_code, message, day_index", [
     ("CanonicalPitRuntimeError", "supplied canonical PIT lease differs from live pointer", 1),
     ("TypeError", "LocalSimReferencedAssetResolver._source_from_package_assets() "
                   "got an unexpected keyword argument 'observation_panel'", 0),
+    ("ProgramLimitExceeded", _OLD_JSONB_MESSAGE, 1),
 ])
-def test_saved_preselection_recovery_uses_original_job_cas_and_writer_lock_on_existing_dev(failure_code, message, day_index):
+def test_saved_preselection_recovery_uses_original_job_cas_and_writer_lock_on_existing_dev(
+        failure_code, message, day_index, monkeypatch):
     from contextlib import contextmanager
     from uuid import uuid4
 
@@ -295,12 +327,30 @@ def test_saved_preselection_recovery_uses_original_job_cas_and_writer_lock_on_ex
             execution_policy_json=policy["policy_json"], tail_policy_version_id="test_int_tail",
             tail_policy_sha256="d" * 64, release_metadata={"localsim_runtime_profile_config": version.config_json},
             created_by=marker)
+        source_id = "market.kline_minute_raw.v1"
+        archive_ref = None
+        if failure_code == "ProgramLimitExceeded":
+            from backend.services.simulation_runtime import localsim_file_inputs, localsim_input_source_plan, localsim_selection_signal
+
+            source_id = localsim_input_source_plan.SOURCE_PLAN_ID
+            archive_ref = _FAILED_ARCHIVE_REF
+            plan = {"plan_hash": "c" * 64}
+            monkeypatch.setattr(localsim_input_source_plan, "current_source_plan", lambda: plan)
+            monkeypatch.setattr(localsim_input_source_plan, "current_source_day", lambda: days[day_index])
+            monkeypatch.setattr(localsim_input_source_plan, "frozen_source_plan", lambda *a, **k: plan)
+            monkeypatch.setattr(localsim_file_inputs, "resolve_replay_source", lambda *a, **k: source)
+
+            def read_archive(root, ref, **kwargs):
+                assert ref == archive_ref and kwargs["evidence_hash_suffix"] == "f" * 44
+                return {"artifact_hash": "f" * 64}, None
+
+            monkeypatch.setattr(localsim_selection_signal, "read_failed_daily_evidence_archive", read_archive)
         coordinator = LocalSimReplayCoordinator(repository=repository, clock=lambda: now,
-            historical_day_runner=LocalSimHistoricalDayRunner(historical_source_id="market.kline_minute_raw.v1",
+            historical_day_runner=LocalSimHistoricalDayRunner(historical_source_id=source_id,
                 historical_source_sha256="c" * 64, run_day=lambda *_: None))
         job = coordinator.create_job(simulation_account_id=account.account_id, release_id=release.release_id,
             binding_id=binding.binding_id, start_trade_date=days[0], end_trade_date=days[-1], trading_days=days,
-            historical_source_id="market.kline_minute_raw.v1", historical_source_sha256="c" * 64, created_by=marker)
+            historical_source_id=source_id, historical_source_sha256="c" * 64, created_by=marker)
         context = {"trade_date": str(days[day_index]), "message": message}
         job = repository.transition_replay_job(replay_job_id=job.replay_job_id, expected_version=job.version,
             update={"status": "FAILED_TERMINAL", "completed_trade_date": days[0] if day_index else None,
@@ -311,10 +361,14 @@ def test_saved_preselection_recovery_uses_original_job_cas_and_writer_lock_on_ex
         owner = LocalSimReplayRecoveryService(repository=repository,
             source_authority=SimpleNamespace(resolve=lambda **_: source), market_provider=SimpleNamespace(),
             pit_authority_resolver=resolver, clock=lambda: now)
-        check = owner.inspect(job.replay_job_id)
+        check = owner.inspect(job.replay_job_id, archive_ref=archive_ref)
         assert check.ready, check.model_dump(mode="json")
         assert check.run_id is None and set(check.economic_counts.values()) == {0}
-        request = LocalSimReplayRecoverRequestV1(expected_version=job.version, snapshot_sha256=check.snapshot_sha256)
+        if archive_ref:
+            assert check.native_input["recovery_reason"] == JSONB_EVIDENCE_RECOVERY_REASON
+            assert validate_replay_recovery_check(check.model_dump(mode="json"))[0] == "passed"
+        request = LocalSimReplayRecoverRequestV1(expected_version=job.version, snapshot_sha256=check.snapshot_sha256,
+                                                   archive_ref=archive_ref)
         with pytest.raises(InvalidStateTransitionError, match="evidence is blocked"):
             owner.recover(job.replay_job_id, request.model_copy(update={"snapshot_sha256": "f" * 64}))
         with psycopg2.connect(**dsn) as other:

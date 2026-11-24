@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from backend.services.simulation_runtime.localsim_replay_recovery import (
+    FAILED_EVIDENCE_ARCHIVE_PATTERN,
     LocalSimReplayRecoverRequestV1, LocalSimReplayRecoveryCheckV1,
 )
 
 from datetime import date
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -534,9 +535,10 @@ def cancel_localsim_replay(
 def inspect_localsim_replay_recovery(
     replay_job_id: str,
     service: LocalSimProductControlPlaneService = Depends(get_localsim_product_service),
+    archive_ref: Annotated[str | None, Query(pattern=FAILED_EVIDENCE_ARCHIVE_PATTERN)] = None,
 ) -> LocalSimReplayRecoveryCheckV1:
     try:
-        return service.inspect_replay_recovery(replay_job_id)
+        return service.inspect_replay_recovery(replay_job_id, archive_ref=archive_ref) if archive_ref else service.inspect_replay_recovery(replay_job_id)
     except TradingCoreError as exc:
         _raise_localsim_http(exc)
 

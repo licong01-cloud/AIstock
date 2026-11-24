@@ -422,3 +422,72 @@ def test_parity_comparison_verifies_lineage_and_does_not_mask_other_stage_values
     assert _comparison(payload, reference)["checks"]["native_stage_values"] is False
     other_alpha["semantic_payload"]["artifact_id"] = "foreign-artifact"
     assert _comparison(payload, reference)["checks"]["native_alpha_lineage_verified"] is False
+
+def test_planned_daily_evidence_uses_owned_compact_raw_with_exact_readback(tmp_path):
+    scope, computed, program, _ = _computed(tmp_path / ("a" * 64), run_id="lsselection_" + "b" * 32)
+    scope.source_plan = {"plan_hash": "c" * 64}
+    scope.artifacts[program.package_id].metadata["large_diagnostic"] = "x" * (1024 * 1024)
+    repository = InMemorySimulationRuntimeRepository()
+    service, stored, identity = _commit(scope, computed, program, repository)
+    owner = stored.model_dump(mode="json")["evidence_payload_json"]["localsim_signal_run"]
+    assert "raw_artifact" not in owner
+    assert len(stored.model_dump_json()) < 100_000
+    path = tmp_path / owner["raw_artifact_ref"]["path"]
+    assert path.stat().st_size > 1024 * 1024
+    result = service._recover(scope.root.parent, identity)
+    assert result.aggregate_results == list(computed.aggregate_results)
+    assert result.score_artifacts_by_package[program.package_id] == scope.artifacts[program.package_id]
+    with path.open("ab") as stream:
+        stream.write(b" ")
+    with pytest.raises(ValueError, match="committed content reference"):
+        service._recover(scope.root.parent, identity)
+
+
+def test_failed_archive_reuses_original_projection_once_without_inference(tmp_path, monkeypatch):
+    from backend.services.simulation_runtime import localsim_input_source_plan as plan_api
+    from backend.services.simulation_runtime.localsim_replay_recovery import localsim_evidence_resume_scope
+
+    identity = "b" * 64
+    original_run = "lsselection_" + "c" * 32
+    scope, computed, program, _ = _computed(tmp_path / identity, run_id=original_run,
+                                           cutoff=TRADE_DATE - timedelta(days=1))
+    service, evidence, _ = _commit(scope, computed, program, InMemorySimulationRuntimeRepository())
+    evidence = evidence.model_copy(update={"release_id": "release", "release_hash": "d" * 64,
+                                           "cutoff_date": scope.clocks.data_cutoff})
+    release = SimpleNamespace(package_id=program.package_id, manifest_sha256=program.manifest_sha256,
+                              release_id=evidence.release_id, release_hash=evidence.release_hash,
+                              runtime_profile_version_id=evidence.runtime_profile_version_id,
+                              runtime_profile_sha256=evidence.runtime_profile_hash)
+    path = scope.root / "evidence" / (hashlib.sha256(program.package_id.encode()).hexdigest() + ".json")
+    _atomic_json(path, evidence.model_dump(mode="json"))
+    _atomic_json(scope.root / "failure.json", {"status": "FAILED", "consumer_scope": "LOCALSIM",
+        "run_id": original_run, "error_type": "ProgramLimitExceeded", "failed_stage": "native_daily_evidence_transaction",
+        "clocks": scope.clocks.to_dict(), "completed_prefix": []})
+    original = path.read_bytes()
+    archive_ref = f"{identity}/{original_run}/{hashlib.sha256(original).hexdigest()}"
+    plan = {"plan_hash": "e" * 64}
+    monkeypatch.setattr(plan_api, "current_source_plan", lambda: plan)
+    monkeypatch.setattr(plan_api, "day_route", lambda *_: {**scope.clocks.to_dict(), "source": "DATABASE"})
+    monkeypatch.setattr(plan_api, "validate_artifact_source", lambda *args: None)
+    monkeypatch.setattr(StrategyPackageSelectionService, "run_selection",
+                        lambda *a, **k: pytest.fail("already finished selection ran again"))
+    service.temporary_root = tmp_path
+    service.native_repository = InMemorySimulationRuntimeRepository()
+    service.package_repository = SimpleNamespace(get=lambda _: SimpleNamespace(manifest_sha256=program.manifest_sha256))
+    receipt = {"trade_date": str(TRADE_DATE), "release_id": release.release_id,
+               "native_input": {"archive_ref": archive_ref, "source_plan_hash": plan["plan_hash"],
+                                "original_evidence_hash": evidence.artifact_hash}}
+    kwargs = {"trade_date": TRADE_DATE, "runtime_config": program.runtime_config, "data_source": "DB_HISTORICAL",
+              "mode": SelectionMode.SINGLE_PACKAGE, "runtime_release": release, "package_ids": [program.package_id]}
+    with localsim_evidence_resume_scope(receipt):
+        first = service.run_selection(**kwargs)
+        second = service.run_selection(**kwargs)
+    assert first.aggregate_results == second.aggregate_results == list(computed.aggregate_results)
+    assert first.score_artifacts_by_package == second.score_artifacts_by_package == scope.artifacts
+    assert first.evidence_by_package == second.evidence_by_package
+    assert len(service.native_repository.daily_selection_evidences) == 1
+    stored = first.evidence_by_package[program.package_id]
+    owner = stored.evidence_payload_json["localsim_signal_run"]
+    assert owner["original_evidence_hash"] == evidence.artifact_hash
+    assert owner["reused_raw_run_id"] == original_run
+    assert "raw_artifact" not in owner and path.read_bytes() == original
