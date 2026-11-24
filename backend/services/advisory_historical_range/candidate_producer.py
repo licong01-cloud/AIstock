@@ -30,7 +30,10 @@ from backend.services.advisory_historical_range.models import (
     derive_prefixed_id,
     normalize_hmm_binding_metadata,
 )
-from backend.services.advisory_historical_range.source_roles import CANDIDATE_SOURCE_ROLES_V2
+from backend.services.advisory_historical_range.source_roles import (
+    CANDIDATE_SOURCE_ROLES_V2,
+    DECISION_MARK_SOURCE_ROLES_V1,
+)
 from backend.services.advisory_historical_range.selection_signal_kernel import (
     SelectionSignalDayV1, SelectionSignalKernel, SelectionSignalRequestV1,
 )
@@ -199,6 +202,19 @@ class HistoricalRangeCandidateProducer:
             decision_trade_date=decision_trade_date,
             source_roles=source_roles,
         )
+        # Mark inputs are independent of candidate inputs, but already-known
+        # drift must stop before native inference. Keep candidate evidence refs
+        # unchanged; the mark provider still verifies before and after its read.
+        if any(member.source_role in DECISION_MARK_SOURCE_ROLES_V1
+               for member in request_payload.source_revision_catalog.members):
+            self._source_verifier.verify_program_day(
+                catalog=request_payload.source_revision_catalog,
+                research_program_id=program.research_program_id,
+                package_id=program.package_id,
+                component_ids=component_ids,
+                decision_trade_date=decision_trade_date,
+                source_roles=DECISION_MARK_SOURCE_ROLES_V1,
+            )
         runtime_config = _resolved_runtime_config_for_day(
             program=program,
             decision_trade_date=decision_trade_date,
