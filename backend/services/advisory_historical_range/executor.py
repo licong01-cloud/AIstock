@@ -811,6 +811,26 @@ class HistoricalRangeDayExecutor:
             mark_ref=mark_ref,
         )
         error_json = {"reason_codes": list(reason_codes), "stage": stage, "error_type": type(error).__name__}
+        if (isinstance(error, HistoricalRangeContractError)
+                and error.reason_code == "ADVISORY_HR_SOURCE_REVISION_MISMATCH"):
+            # Only identifiers and scalar digests/counts from the source verifier
+            # belong in the durable receipt; never persist arbitrary exceptions,
+            # connection parameters, or the original message/context wholesale.
+            source_context = {
+                key: value
+                for key in (
+                    "requirement_id", "revision_id", "source_role", "dataset_id", "partition_ref",
+                    "package_id", "component_id", "decision_trade_date",
+                    "expected_revision_hash", "actual_revision_hash",
+                    "expected_content_hash", "actual_content_hash",
+                    "expected_row_count", "actual_row_count",
+                    "expected_schema_fingerprint", "actual_schema_fingerprint",
+                )
+                if type(value := error.context.get(key)) in (str, int)
+                and (not isinstance(value, str) or len(value) <= 512)
+            }
+            if source_context:
+                error_json["source_revision_context"] = source_context
         if isinstance(error, TradingCoreError):
             error_json["domain_error_code"] = error.error_code
         elif isinstance(error, HistoricalRangeSourceInputUnavailable):

@@ -945,10 +945,22 @@ class PostgresHistoricalRangeSourceRevisionVerifier:
                             REASON_SOURCE_REVISION_MISMATCH,
                             "historical source partition changed after request seal",
                             context={
+                                "requirement_id": expected.requirement_id,
                                 "revision_id": expected.revision_id,
                                 "source_role": expected.source_role,
+                                "dataset_id": expected.dataset_id,
+                                "partition_ref": expected.partition_ref,
+                                "package_id": package_id,
+                                "component_id": expected.component_id,
+                                "decision_trade_date": decision_trade_date.isoformat(),
                                 "expected_revision_hash": expected.revision_hash,
                                 "actual_revision_hash": actual.revision_hash,
+                                "expected_content_hash": expected.content_hash,
+                                "actual_content_hash": actual.content_hash,
+                                "expected_row_count": expected.row_count,
+                                "actual_row_count": actual.row_count,
+                                "expected_schema_fingerprint": expected.schema_fingerprint,
+                                "actual_schema_fingerprint": actual.schema_fingerprint,
                             },
                         )
             conn.rollback()
