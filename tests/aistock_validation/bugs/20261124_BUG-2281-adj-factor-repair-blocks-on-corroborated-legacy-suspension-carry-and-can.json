@@ -10,7 +10,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2281",
-  "closed_at": null,
+  "closed_at": "2026-11-24T02:20:43.466974Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -30,21 +30,21 @@
   "expected": "Scoped retries update only requested histories, preserve proven nontrading facts, and release only the matching verified dated conflicts.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261124_BUG-2281-adj-factor-repair-blocks-on-corroborated-legacy-suspension-carry-and-can.json",
       "backend/ingestion/tdx_scheduler.py",
       "backend/services/adj_factor_history_reconciler.py",
       "backend/tests/ingestion/test_tdx_scheduler_adj_factor.py",
       "backend/tests/services/test_adj_factor_history_reconciler.py",
-      "scripts/ingest_tushare_adj_factor.py"
+      "scripts/ingest_tushare_adj_factor.py",
+      "tests/aistock_validation/bugs/20261124_BUG-2281-adj-factor-repair-blocks-on-corroborated-legacy-suspension-carry-and-can.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261124_BUG-2281-adj-factor-repair-blocks-on-corroborated-legacy-suspension-carry-and-can.json",
       "backend/ingestion/tdx_scheduler.py",
       "backend/services/adj_factor_history_reconciler.py",
       "backend/tests/ingestion/test_tdx_scheduler_adj_factor.py",
       "backend/tests/services/test_adj_factor_history_reconciler.py",
-      "scripts/ingest_tushare_adj_factor.py"
+      "scripts/ingest_tushare_adj_factor.py",
+      "tests/aistock_validation/bugs/20261124_BUG-2281-adj-factor-repair-blocks-on-corroborated-legacy-suspension-carry-and-can.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -153,8 +153,8 @@
   },
   "first_seen_at": "2026-11-24T01:58:58.354980Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "8fbf698ee61b9459d497d6690820b5f6664bbc2a",
+  "fixed_at": "2026-11-24T02:11:03Z",
   "github_issue_number": 7451,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7451",
   "last_seen_at": "2026-11-24T01:58:58.354980Z",
@@ -162,6 +162,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7452",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -188,9 +189,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-2281/verified-runtime.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2281",
+      "business_smoke_semantic": {
+        "contract_id": "local_data_freshness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "e49ea55d85a17e74db97ae002f4da0d40fbf7b0441f6386d5a270dbc76470bf6",
+      "contract_digest": "ec16c7819146bc1d6d5faac47e7966a10a277106121e2d64c39fabc4e5c62288",
+      "expected_identity": "8fbf698ee61b9459d497d6690820b5f6664bbc2a",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-11-24T02:15:33.546365Z",
+      "mode": "read_only",
+      "observed_identity": "8fbf698ee61b9459d497d6690820b5f6664bbc2a",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "fb251baaa4588d60682a1748130874e4b64dfd6aa09c1309a35bbcc36113916a",
+      "receipt_sha256": "c36a1ecd618ffb57a34683a19afeec6cc3d59cd7fdc5eb6abfbd5ecba4386a53",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "19844bfc064319b871b5fa4380fbe925436745c49ff19159c4575d480e81c685",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -200,7 +224,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2281",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "a8fed73e639059dc",
+    "recorded_at": "2026-11-24T02:12:03.013872Z",
+    "runtime_contract_digest": "ec16c7819146bc1d6d5faac47e7966a10a277106121e2d64c39fabc4e5c62288",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "d1c167e7af89ad1ed088052feff07d00698b0412",
+    "source_merge_commit": "8fbf698ee61b9459d497d6690820b5f6664bbc2a",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7452",
+    "validation_evidence": [
+      "python -m nox -s l0 -- --changed-only -> passed, 0 blocking",
+      "rtk pytest -q backend/tests/services/test_adj_factor_history_reconciler.py backend/tests/ingestion/test_tdx_scheduler_adj_factor.py -> passed (90 tests); Ruff, py_compile and git diff --check passed; existing DEV real factor DML and ledger write/readback passed inside rollback envelope (idempotent repeat wrote zero); production exact scope read-only dry run verified 49 plus final 000545.SZ, zero writes."
+    ],
+    "validation_evidence_digest": "2577caf671c801d409ee058f5626ea6b2d362cc6e34e71629acf3473c38a57e2"
+  },
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -209,6 +255,11 @@
     "fingerprint": "b8b871d1e09aa5841d6f2388",
     "source_event_id": "FE-20261124-b8b871d1e09a"
   },
+  "validation_evidence": [
+    "python -m nox -s l0 -- --changed-only -> passed, 0 blocking",
+    "rtk pytest -q backend/tests/services/test_adj_factor_history_reconciler.py backend/tests/ingestion/test_tdx_scheduler_adj_factor.py -> passed (90 tests); Ruff, py_compile and git diff --check passed; existing DEV real factor DML and ledger write/readback passed inside rollback envelope (idempotent repeat wrote zero); production exact scope read-only dry run verified 49 plus final 000545.SZ, zero writes.",
+    "Production scoped adj_factor repair a55cbc1f-17fb-46ed-a771-90fdc5dc3fa8 -> passed; 50/50 exact scoped securities, zero failures, 247304 history rows written. Production 2026-11-23 physical and API validation 5224/5224, zero gaps, data and validated revision 5224, validation ID div_e956ba00a42420f422df44dbdc2fb939a01018dff20235dd5cb32ea33969f4f7."
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
