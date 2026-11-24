@@ -116,7 +116,7 @@ def main():
     sheet = review(pd.read_parquet(args.days, columns=DAYS),
                    pd.read_parquet(args.stocks, columns=STOCKS),
                    pd.read_parquet(args.warnings, columns=PRED) if args.warnings else None)
-    sheet.to_csv(args.output or sys.stdout, index=False, encoding="utf-8-sig")
+    sheet.to_csv(args.output or sys.stdout.buffer, index=False, encoding="utf-8-sig")
 
 
 if __name__ == "__main__":
