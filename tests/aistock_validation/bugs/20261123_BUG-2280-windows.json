@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2280",
-  "closed_at": null,
+  "closed_at": "2026-11-24T01:37:48.228825Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -141,7 +141,8 @@
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
     "database_readback_ref": "http://127.0.0.1:8001/api/v1/local-data/integrity/days/2026-11-23",
     "fresh_process_evidence": [
-      "84 tests passed in worktree. The native Windows subprocess received the full 5224-stock exact JSON scope via stdin with unchanged dates and job UUID; generated process argv remained under the Windows limit. CLI rejects empty or malformed scope. Test stubbed storage on scheduler and called the real CLI parser in a separate process. Producer DML and collection were not invoked."
+      "84 tests passed in worktree. The native Windows subprocess received the full 5224-stock exact JSON scope via stdin with unchanged dates and job UUID; generated process argv remained under the Windows limit. CLI rejects empty or malformed scope. Test stubbed storage on scheduler and called the real CLI parser in a separate process. Producer DML and collection were not invoked.",
+      "2026-11-24 read-only replay loaded the actual 5224-code scope of failed job af4da0cf-a978-43bf-9083-773160f9751d. A native Windows child parsed the exact scope SHA256 0a52299f6cdab1869450a14bddb9ed287a55ca45dd4a447a8312619cd9599d19 with a 253-character command line and unchanged dates and job ID. No ingestion fired. The 2026-11-23 partition had 5174 physical rows for 5224 expected. All 50 missing keys matched the separate nontrading-history conflicts in the overnight full-market run."
     ],
     "health_ref": "http://127.0.0.1:8001/api/v1/health",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
@@ -151,10 +152,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-2280/verified-runtime.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2280",
+      "business_smoke_semantic": {
+        "contract_id": "local_data_freshness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "e49ea55d85a17e74db97ae002f4da0d40fbf7b0441f6386d5a270dbc76470bf6",
+      "contract_digest": "ec16c7819146bc1d6d5faac47e7966a10a277106121e2d64c39fabc4e5c62288",
+      "expected_identity": "16b78f1fcf81dee2b4768e0bd4f4e9868647d233",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-11-24T01:35:55.257919Z",
+      "mode": "read_only",
+      "observed_identity": "74897ba9bf1382353dd37b7a3ed6f31d5b856832",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "75dac8cccfea5547b4e0311f085f9f22faa909e0667ddba0fab014c21cd7932b",
+      "receipt_sha256": "067cf7eb1b5c0c3153bb0a45a35f12007c2e3ae1ff089375e3e5241278caeefa",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "ddf9a42d04dd7bff03af8e9eb6f3aed829347248738da792cea7fa3a37c463e2",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -185,7 +208,7 @@
     ],
     "validation_evidence_digest": "380cb4bd0a490b1962ec2237421445c5e05422806343bb8ef925a088b53bb418"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -195,7 +218,8 @@
     "source_event_id": "FE-20261123-5efa911cb8d6"
   },
   "validation_evidence": [
-    "validation-receipt: id=36d3e0b9bc0beddf commit=50edd4ac8e2d2b36d808593e429811457b694528 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- --changed-only` result=`passed, 0 blocking`"
+    "validation-receipt: id=36d3e0b9bc0beddf commit=50edd4ac8e2d2b36d808593e429811457b694528 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- --changed-only` result=`passed, 0 blocking`",
+    "python -m nox -s l0 -- --changed-only -> passed, 0 blocking"
   ],
   "verification_budget": {
     "budget": "standard",
