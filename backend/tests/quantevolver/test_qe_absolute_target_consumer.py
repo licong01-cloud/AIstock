@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+from datetime import date
 import json
 from pathlib import Path
 import sys
@@ -8,6 +9,7 @@ from types import SimpleNamespace
 
 import pandas as pd
 import pytest
+import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "backend/services/quantevolver"))
 sys.path.insert(1, str(Path(__file__).resolve().parents[3] / "scripts"))
@@ -41,6 +43,71 @@ def targets(tmp_path):
 def rewrite(contract, frame):
     frame.to_parquet(contract["targets"]["path"], index=False, row_group_size=3)
     contract["targets"]["sha256"] = file_sha256(contract["targets"]["path"])
+
+
+@pytest.mark.parametrize("cutoff, uses_bounded_calendar", [("2026-04-03", True), ("2026-04-07", False)])
+def test_absolute_target_composer_preserves_execution_at_release_cutoff(targets, tmp_path, monkeypatch, cutoff,
+                                                                uses_bounded_calendar):
+    from backend.services.quantevolver import config_composer
+    from backend.services.quantevolver.absolute_target_consumer import compose_absolute_targets
+    from backend.services.quantevolver.qe_active_dataset_profile import QE_RUN_COVERAGE_RECEIPT_PARAM
+
+    contract, _, _ = targets
+    algo = {"class": "TailTWAPWithLimitStrategy", "module_path": "tail_twap_strategy",
+            "kwargs": {"unfilled_handler": "TAIL_BOOST", "unfilled_trigger_minute": 235}}
+    executor = {"class": "NestedExecutor", "module_path": "qlib.backtest.executor",
+                "kwargs": {"time_per_step": "day", "inner_strategy": algo,
+                           "inner_executor": {"class": "SimulatorExecutor", "module_path": "qlib.backtest.executor",
+                                              "kwargs": {"time_per_step": "1min", "track_data": True}}}}
+    exchange = {"freq": "1min", "open_cost": .000095, "close_cost": .000595, "trade_unit": 100, "min_cost": 5}
+    original = {"qlib_init": {"region": "cn"}, "benchmark": "SH000300",
+                "port_analysis_config": {"executor": executor, "backtest": {"exchange_kwargs": exchange}}}
+    reference = tmp_path / "reference.yaml"
+    reference.write_text(yaml.safe_dump(original), encoding="utf-8")
+    contract["execution_reference"] = {"path": str(reference), "sha256": file_sha256(reference)}
+    coverage = tmp_path / "coverage.json"
+    coverage.write_text("{}", encoding="utf-8")
+    binding = {"release_id": "release", "cutoff": cutoff,
+               "provider_uri_day": "/data/day", "provider_uri_1min": "/data/minute",
+               "factor_data_dir": "/data/factors", "index_context_path": "/data/indices",
+               "selection_pins": {"instrument_name": "pit", "coverage_receipt_sha256": file_sha256(coverage)}}
+    monkeypatch.setattr(config_composer, "_direct_v2_dataset_binding", lambda _: SimpleNamespace(
+        **{**binding, "cutoff": date.fromisoformat(cutoff)}, as_dict=lambda: binding))
+    composer = SimpleNamespace(
+        _execution_algo_config=lambda *args: algo,
+        _fetch_workspace_config=lambda _: {"workspace_base": "/work"},
+        _prepare_risk_policy_runtime=lambda **kwargs: (None, "{}"),
+        _resolve_qe_helper_asset=config_composer.ConfigComposer._resolve_qe_helper_asset,
+        _get_read_exp_res_content=lambda: "",
+        _build_auto_wsl_command_parts=lambda *args, **kwargs: (None, ["activate", "python qrun_limit_minute.py conf.yaml"]),
+        _build_conda_activate_chain=lambda: "activate",
+    )
+    window = contract["window"]
+    result = compose_absolute_targets(
+        composer, custom_params={"absolute_target_replay": contract, QE_RUN_COVERAGE_RECEIPT_PARAM: "{}",
+                                 "_qe_active_dataset_summary": {"release_id": "release", "dataset_manifest_sha256": "a" * 64,
+                                                               "profile_sha256": "b" * 64}},
+        factor_names=[], model_id=None, strategy_id=None, experiment_name="test",
+        data_split={"test_start": window["account_start"], "backtest_end": window["account_end"]},
+        execution_algo="TWAP", execution_algo_params={}, strategy_params={}, node_id="test-node",
+        task_id="test", loop_index=1, train_only=False, skip_db_save=True,
+    )
+    files = result["experiment_files"]
+    port = yaml.safe_load(files["conf.yaml"])["port_analysis_config"]
+    expected_executor = copy.deepcopy(executor)
+    if uses_bounded_calendar:
+        expected_executor.update({"class": "BoundedTerminalNestedExecutor", "module_path": "qe_terminal_interval_executor"})
+        expected_executor["kwargs"]["inner_executor"].update({
+            "class": "BoundedTerminalSimulatorExecutor", "module_path": "qe_terminal_interval_executor"})
+        worker = Path(config_composer.__file__).resolve().parents[3] / "scripts/qe_terminal_interval_executor.py"
+        assert files[worker.name] == worker.read_text(encoding="utf-8")
+    else:
+        assert "qe_terminal_interval_executor.py" not in files
+    assert port["executor"] == expected_executor
+    assert port["backtest"] == {"exchange_kwargs": exchange, "start_time": window["account_start"],
+                                "end_time": window["account_end"], "account": contract["initial_cash"]}
+    assert yaml.safe_load(files["qe_absolute_target_execution_reference.yaml"]) == original
+    assert result["wsl_command"].count("--absolute-target-replay") == 1
 
 
 def test_full_window_absolute_values_unknown_and_no_second_lag(targets):

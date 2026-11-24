@@ -36,6 +36,19 @@ def _node(mapping, key):
     return matches[0]
 
 
+def bind_terminal_interval_executors(executor, *, files, scripts_dir):
+    executor = deepcopy(executor)
+    inner = executor["kwargs"]["inner_executor"]
+    require((executor["class"], inner["class"]) == ("NestedExecutor", "SimulatorExecutor"), "EXECUTORS")
+    require(executor["module_path"] == inner["module_path"] == "qlib.backtest.executor", "EXECUTOR_MODULE")
+    executor.update({"class": "BoundedTerminalNestedExecutor", "module_path": "qe_terminal_interval_executor"})
+    inner.update({"class": "BoundedTerminalSimulatorExecutor", "module_path": "qe_terminal_interval_executor"})
+    name = "qe_terminal_interval_executor.py"
+    require(name not in files, "WORKER_COLLISION")
+    files[name] = (Path(scripts_dir) / name).read_text(encoding="utf-8")
+    return executor
+
+
 def apply_terminal_replay(result, spec, *, scripts_dir):
     if spec is None:
         return result
@@ -51,15 +64,11 @@ def apply_terminal_replay(result, spec, *, scripts_dir):
     require(str(port["backtest"]["start_time"]) == spec["start"]
             and str(port["backtest"]["end_time"]) == spec["terminal_date"]
             and port["backtest"]["exchange_kwargs"]["freq"] == "1min", "CONFIG_WINDOW")
-    executor = port["executor"]
+    executor = bind_terminal_interval_executors(port["executor"], files=files, scripts_dir=scripts_dir)
     inner = executor["kwargs"]["inner_executor"]
-    require((executor["class"], inner["class"]) == ("NestedExecutor", "SimulatorExecutor"), "EXECUTORS")
-    require(executor["module_path"] == inner["module_path"] == "qlib.backtest.executor", "EXECUTOR_MODULE")
-    executor.update({"class": "BoundedTerminalNestedExecutor", "module_path": "qe_terminal_interval_executor"})
-    inner.update({"class": "BoundedTerminalSimulatorExecutor", "module_path": "qe_terminal_interval_executor"})
-    for name in ("qe_terminal_replay_preflight.py", "qe_terminal_interval_executor.py"):
-        require(name not in files, "WORKER_COLLISION")
-        files[name] = (Path(scripts_dir) / name).read_text(encoding="utf-8")
+    name = "qe_terminal_replay_preflight.py"
+    require(name not in files, "WORKER_COLLISION")
+    files[name] = (Path(scripts_dir) / name).read_text(encoding="utf-8")
     envelope_name = "qe_terminal_replay_contract.json"
     require(envelope_name not in files, "ENVELOPE_COLLISION")
     files[envelope_name] = json.dumps({"spec": spec, "dataset_binding": deepcopy(binding)}, ensure_ascii=False, sort_keys=True)

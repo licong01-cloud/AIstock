@@ -191,6 +191,13 @@ def compose_absolute_targets(composer, *, custom_params, factor_names, model_id,
                                     "calendar_file": day_provider.rstrip("/") + "/calendars/day.txt"}},
             "backtest": {**port["backtest"], "start_time": w["account_start"], "end_time": w["account_end"],
                          "account": contract["initial_cash"]}}
+    scripts = Path(__file__).resolve().parents[3] / "scripts"
+    if w["account_end"] == binding.cutoff.isoformat():
+        from .terminal_replay_consumer import bind_terminal_interval_executors
+
+        port["executor"] = bind_terminal_interval_executors(
+            port["executor"], files=files, scripts_dir=scripts,
+        )
     conf = {"qlib_init": {**original["qlib_init"],
                           "provider_uri": {"day": day_provider, "1min": binding.provider_uri_1min}},
             "market": binding.selection_pins["instrument_name"], "benchmark": original["benchmark"],
@@ -199,7 +206,6 @@ def compose_absolute_targets(composer, *, custom_params, factor_names, model_id,
             "qe_runtime": {"mode": PARAM, "training": "NOT_APPLICABLE", "prediction": "NOT_APPLICABLE"},
             PARAM: contract}
     files["conf.yaml"] = yaml.safe_dump(conf, allow_unicode=True, sort_keys=False)
-    scripts = Path(__file__).resolve().parents[3] / "scripts"
     # Explicit dependency closure, shared helpers stay authoritative.
     for name in {*QE_MINUTE_RUNTIME_HELPER_FILES, "qrun_limit_minute.py", "tail_twap_strategy.py",
                  "qe_runtime_resource.py", "qe_absolute_targets.py", "qe_absolute_target_strategy.py",

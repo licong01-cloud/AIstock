@@ -129,11 +129,18 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qe-archive/health",
+    "fresh_process_evidence": [
+      "Fresh source composed all eleven exact frozen absolute-target replays through BacktestExecutor. The read-only preflight verified node and profile identity, no existing retry or original account result, unchanged economic configuration, and no train or inference flags. Receipt tmp/handoff/qe-r1070-terminal-recovery-20261125/review.json SHA256 255d44c8dc1557ddd90dfe5cc29b5755dbfd6eabe4416be9383dd4afa9648914.",
+      "Node rdagent-node1 showed repaired pilot qe_r1070_terminal_retry_20261125/Loop1 (2c103007, original ad425a2c) running with its own absolute-target recorder and exact reviewed worker/config SHA. Receipt tmp/handoff/qe-r1070-terminal-recovery-20261125/pilot_execution_load.json SHA256 438adb376c336e3858c055c985f89feae8dd3452fd1918bc7139c3d60889000b. The 565-day account and formal archive require subsequent native readback."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "post_restart_note": "After the user reloads backend-main, verify the merged runtime identity and QE archive health. Verify the native absolute-target composer binds the bounded day and minute executors for the frozen release cutoff while leaving intra-release accounts intact. Read back the original run mapping and terminal session ledger and archive receipts from the existing recovery. A second recovery budget is unnecessary.",
+    "provisional": false,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
