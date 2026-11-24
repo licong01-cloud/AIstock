@@ -1714,7 +1714,7 @@ class TDXScheduler:
                           if is_supported_stock_code(str(code).strip())})
         if (row.get("validation_status") == "INCOMPLETE"
                 and row.get("data_revision") == row.get("validated_revision") and symbols
-                and all(gap.get("classification") in {"MISSING", "INVALID"} for gap in gaps)):
+                and all(gap.get("classification") in {"MISSING", "INVALID", "HISTORY_CONFLICT"} for gap in gaps)):
             from ..data_service.security_source_identity import load_default_security_source_identity_manifest
             authority = load_default_security_source_identity_manifest()
             quote_codes = [authority.resolve(code, day, "market.kline_daily_raw").source_ts_code for code in symbols]
