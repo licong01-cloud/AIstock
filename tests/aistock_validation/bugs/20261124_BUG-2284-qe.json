@@ -29,13 +29,20 @@
   ],
   "expected": "截止发布末日的绝对目标回放使用真实末日成交与收盘完成；较早截止的回放与预测回放保持原合同。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/quantevolver/absolute_target_consumer.py",
+      "backend/services/quantevolver/terminal_replay_consumer.py",
+      "backend/tests/quantevolver/test_qe_absolute_target_consumer.py",
+      "tests/aistock_validation/bugs/20261124_BUG-2284-qe.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/quantevolver/absolute_target_consumer.py",
       "backend/services/quantevolver/terminal_replay_consumer.py",
-      "backend/tests/quantevolver/test_qe_absolute_target_consumer.py"
+      "backend/tests/quantevolver/test_qe_absolute_target_consumer.py",
+      "tests/aistock_validation/bugs/20261124_BUG-2284-qe.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/quantevolver/absolute_target_consumer.py",
@@ -132,7 +139,8 @@
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qe-archive/health",
     "fresh_process_evidence": [
       "Fresh source composed all eleven exact frozen absolute-target replays through BacktestExecutor. The read-only preflight verified node and profile identity, no existing retry or original account result, unchanged economic configuration, and no train or inference flags. Receipt tmp/handoff/qe-r1070-terminal-recovery-20261125/review.json SHA256 255d44c8dc1557ddd90dfe5cc29b5755dbfd6eabe4416be9383dd4afa9648914.",
-      "Node rdagent-node1 showed repaired pilot qe_r1070_terminal_retry_20261125/Loop1 (2c103007, original ad425a2c) running with its own absolute-target recorder and exact reviewed worker/config SHA. Receipt tmp/handoff/qe-r1070-terminal-recovery-20261125/pilot_execution_load.json SHA256 438adb376c336e3858c055c985f89feae8dd3452fd1918bc7139c3d60889000b. The 565-day account and formal archive require subsequent native readback."
+      "Node rdagent-node1 showed repaired pilot qe_r1070_terminal_retry_20261125/Loop1 (2c103007, original ad425a2c) running with its own absolute-target recorder and exact reviewed worker/config SHA. Receipt tmp/handoff/qe-r1070-terminal-recovery-20261125/pilot_execution_load.json SHA256 438adb376c336e3858c055c985f89feae8dd3452fd1918bc7139c3d60889000b. The 565-day account and formal archive require subsequent native readback.",
+      "Fresh composer and worker receipts tmp/handoff/qe-r1070-terminal-recovery-20261125/review.json and pilot_execution_load.json"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
@@ -141,6 +149,7 @@
     "post_restart_effective_gate": "pending_user_restart",
     "post_restart_note": "After the user reloads backend-main, verify the merged runtime identity and QE archive health. Verify the native absolute-target composer binds the bounded day and minute executors for the frozen release cutoff while leaving intra-release accounts intact. Read back the original run mapping and terminal session ledger and archive receipts from the existing recovery. A second recovery budget is unnecessary.",
     "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
