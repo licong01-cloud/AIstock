@@ -1,3 +1,7 @@
+import subprocess
+import sys
+from pathlib import Path
+
 import pandas as pd
 import pytest
 
@@ -51,3 +55,15 @@ def test_explicitly_unavailable_model_keeps_the_other_warning():
     assert row.code == "B" and pd.isna(row.M0) and not row.M1 and row.warning_status == "PARTIAL"
     with pytest.raises(ValueError, match="incomplete"):
         review(days, stocks, warnings.assign(p0=.3))
+
+
+def test_cli_stdout_matches_output_file(tmp_path):
+    days, stocks = sample()
+    days.to_parquet(tmp_path / "days.parquet", index=False)
+    stocks.to_parquet(tmp_path / "stocks.parquet", index=False)
+    script = Path(__file__).resolve().parents[3] / "scripts/hmm_risk/review_retained_holdings.py"
+    cmd = [sys.executable, str(script), "--days", "days.parquet", "--stocks", "stocks.parquet"]
+    stream = subprocess.check_output(cmd, cwd=tmp_path)
+    subprocess.run([*cmd, "--output", "review.csv"], cwd=tmp_path, check=True)
+    assert stream == (tmp_path / "review.csv").read_bytes()
+    assert len(stream.decode("utf-8-sig").splitlines()) == 2
