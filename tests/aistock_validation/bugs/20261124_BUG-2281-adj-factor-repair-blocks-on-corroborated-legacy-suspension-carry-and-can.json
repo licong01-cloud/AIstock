@@ -10,7 +10,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2281",
-  "closed_at": null,
+  "closed_at": "2026-11-24T02:20:43.466974Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -189,10 +189,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-2281/verified-runtime.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2281",
+      "business_smoke_semantic": {
+        "contract_id": "local_data_freshness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "e49ea55d85a17e74db97ae002f4da0d40fbf7b0441f6386d5a270dbc76470bf6",
+      "contract_digest": "ec16c7819146bc1d6d5faac47e7966a10a277106121e2d64c39fabc4e5c62288",
+      "expected_identity": "8fbf698ee61b9459d497d6690820b5f6664bbc2a",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-11-24T02:15:33.546365Z",
+      "mode": "read_only",
+      "observed_identity": "8fbf698ee61b9459d497d6690820b5f6664bbc2a",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "fb251baaa4588d60682a1748130874e4b64dfd6aa09c1309a35bbcc36113916a",
+      "receipt_sha256": "c36a1ecd618ffb57a34683a19afeec6cc3d59cd7fdc5eb6abfbd5ecba4386a53",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "19844bfc064319b871b5fa4380fbe925436745c49ff19159c4575d480e81c685",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -224,7 +246,7 @@
     ],
     "validation_evidence_digest": "2577caf671c801d409ee058f5626ea6b2d362cc6e34e71629acf3473c38a57e2"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -235,7 +257,8 @@
   },
   "validation_evidence": [
     "python -m nox -s l0 -- --changed-only -> passed, 0 blocking",
-    "rtk pytest -q backend/tests/services/test_adj_factor_history_reconciler.py backend/tests/ingestion/test_tdx_scheduler_adj_factor.py -> passed (90 tests); Ruff, py_compile and git diff --check passed; existing DEV real factor DML and ledger write/readback passed inside rollback envelope (idempotent repeat wrote zero); production exact scope read-only dry run verified 49 plus final 000545.SZ, zero writes."
+    "rtk pytest -q backend/tests/services/test_adj_factor_history_reconciler.py backend/tests/ingestion/test_tdx_scheduler_adj_factor.py -> passed (90 tests); Ruff, py_compile and git diff --check passed; existing DEV real factor DML and ledger write/readback passed inside rollback envelope (idempotent repeat wrote zero); production exact scope read-only dry run verified 49 plus final 000545.SZ, zero writes.",
+    "Production scoped adj_factor repair a55cbc1f-17fb-46ed-a771-90fdc5dc3fa8 -> passed; 50/50 exact scoped securities, zero failures, 247304 history rows written. Production 2026-11-23 physical and API validation 5224/5224, zero gaps, data and validated revision 5224, validation ID div_e956ba00a42420f422df44dbdc2fb939a01018dff20235dd5cb32ea33969f4f7."
   ],
   "verification_budget": {
     "budget": "standard",
