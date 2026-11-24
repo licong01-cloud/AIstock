@@ -246,9 +246,16 @@ class LocalSimReplayCoordinator:
                 "LocalSIM historical replay cannot consume the current or future trading date",
                 context={"reason_code": "LOCALSIM_REPLAY_CURRENT_DAY_SOURCE_FORBIDDEN"},
             )
+        from .localsim_replay_recovery import (
+            PRESELECTION_RECOVERY_KEY, localsim_evidence_resume_scope, replay_evidence_resume_receipt,
+        )
+
         start_index = days.index(job.next_trade_date) if job.next_trade_date is not None else len(days)
+        resume_receipt = replay_evidence_resume_receipt(job)
         current = job
-        if current.status is not LocalSimReplayStatus.RUNNING_HISTORICAL:
+        # A recovered archive remains durable until its day has committed.
+        # On restart the original failed-day receipt must still be available.
+        if current.status is not LocalSimReplayStatus.RUNNING_HISTORICAL and resume_receipt is None:
             current = self.repository.transition_replay_job(
                 replay_job_id=current.replay_job_id,
                 expected_version=current.version,
@@ -260,8 +267,10 @@ class LocalSimReplayCoordinator:
                 updated_at=self._now(),
             )
         for trade_date in days[start_index : start_index + max_days]:
+            day_resume = resume_receipt if trade_date == job.next_trade_date else None
             try:
-                self.historical_day_runner(current, trade_date)
+                with localsim_evidence_resume_scope(day_resume):
+                    self.historical_day_runner(current, trade_date)
             except Exception as exc:
                 error_context = getattr(exc, "context", {}) or {}
                 retryable = isinstance(exc, DataUnavailableError) or (
@@ -270,6 +279,8 @@ class LocalSimReplayCoordinator:
                     and error_context.get("thread_isolated") is True
                 )
                 failure_context = {"message": str(exc)[:1000], "trade_date": trade_date.isoformat()}
+                if day_resume is not None:
+                    failure_context[PRESELECTION_RECOVERY_KEY] = day_resume
                 # Persist bounded operational facts, never provider stdout or environment contents.
                 for key in (
                     "reason_code", "failure_stage", "thread_isolated", "started_at",
@@ -303,6 +314,7 @@ class LocalSimReplayCoordinator:
                     ),
                     "completed_trade_date": trade_date,
                     "next_trade_date": next_trade_date,
+                    **({"failure_code": None, "failure_context": None} if day_resume is not None else {}),
                 },
                 updated_at=self._now(),
             )

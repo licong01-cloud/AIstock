@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 from copy import deepcopy
 from datetime import UTC, date, datetime
 import ast
 import json
+from functools import partial
 from pathlib import Path
 from math import isfinite
 import re
@@ -26,6 +29,38 @@ OBSERVATION_PANEL_SIGNATURE_ERROR = (
     "LocalSimReferencedAssetResolver._source_from_package_assets() got an unexpected keyword argument 'observation_panel'"
 )
 OBSERVATION_PANEL_RECOVERY_REASON = "LOCALSIM_OBSERVATION_PANEL_SIGNATURE_REPAIRED"
+JSONB_EVIDENCE_RECOVERY_REASON = "LOCALSIM_HISTORICAL_EVIDENCE_JSONB_REPAIRED"
+JSONB_LIMIT_MESSAGE = "total size of jsonb object elements exceeds the maximum of 268435455 bytes"
+FAILED_EVIDENCE_ARCHIVE_PATTERN = r"^[0-9a-f]{64}/lsselection_[0-9a-f]{32}/[0-9a-f]{64}$"
+_EVIDENCE_RESUME: ContextVar[dict | None] = ContextVar("localsim_evidence_resume", default=None)
+
+
+def current_localsim_evidence_resume():
+    return _EVIDENCE_RESUME.get()
+
+
+@contextmanager
+def localsim_evidence_resume_scope(receipt):
+    token = _EVIDENCE_RESUME.set(receipt)
+    try:
+        yield
+    finally:
+        _EVIDENCE_RESUME.reset(token)
+
+
+def replay_evidence_resume_receipt(job):
+    receipt = (job.failure_context or {}).get(PRESELECTION_RECOVERY_KEY)
+    if not receipt or receipt.get("native_input", {}).get("recovery_reason") != JSONB_EVIDENCE_RECOVERY_REASON:
+        return None
+    if (receipt.get("replay_job_id") != job.replay_job_id or receipt.get("binding_id") != job.binding_id
+            or receipt.get("release_id") != job.release_id or receipt.get("trade_date") != str(job.next_trade_date)
+            or receipt["native_input"].get("source_plan_hash") != job.historical_source_sha256
+            or receipt.get("receipt_sha256") != canonical_json_sha256({
+                key: value for key, value in receipt.items() if key != "receipt_sha256"
+            })):
+        raise InvalidStateTransitionError("LocalSIM archived selection recovery receipt changed",
+            context={"reason_code": "LOCALSIM_REPLAY_RECOVERY_ARCHIVE_IDENTITY_CONFLICT"})
+    return receipt
 RETIREMENT_KEY = "localsim_memory_handle_retirement_v1"
 ECONOMIC_TABLES = ("run", "orders", "order_events", "fills", "cash_ledger", "positions", "daily_snapshots")
 ROLLED_BACK_LOCAL_SIM_FAILURES = frozenset({
@@ -50,6 +85,7 @@ class LocalSimReplayRecoverRequestV1(BaseModel):
     schema_version: Literal["localsim_replay_recover_request_v1"] = "localsim_replay_recover_request_v1"
     expected_version: int = Field(ge=1)
     snapshot_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    archive_ref: str | None = Field(default=None, pattern=FAILED_EVIDENCE_ARCHIVE_PATTERN)
 
 
 class LocalSimReplayRecoveryCheckV1(BaseModel):
@@ -87,6 +123,13 @@ def validate_replay_recovery_check(payload: Any) -> tuple[str, str | None, dict[
             if native.get("recovery_reason") == OBSERVATION_PANEL_RECOVERY_REASON:
                 return "passed", None, {"ready": True, "zero_economic_effects": True,
                                         "recovery_phase": "PRESELECTION", "recovery_reason": OBSERVATION_PANEL_RECOVERY_REASON}
+            if native.get("recovery_reason") == JSONB_EVIDENCE_RECOVERY_REASON:
+                if (re.fullmatch(FAILED_EVIDENCE_ARCHIVE_PATTERN, native.get("archive_ref", "")) is None
+                        or any(re.fullmatch(r"[0-9a-f]{64}", native.get(key, "")) is None
+                               for key in ("source_plan_hash", "original_evidence_hash"))):
+                    raise ValueError("JSONB recovery needs its pinned original evidence and source")
+                return "passed", None, {"ready": True, "zero_economic_effects": True,
+                                        "recovery_phase": "PRESELECTION", "recovery_reason": JSONB_EVIDENCE_RECOVERY_REASON}
             if re.fullmatch(r"[0-9a-f]{64}", native.get("pit_runtime_config_sha256", "")) is None:
                 raise ValueError("preselection PIT recovery needs its original candidate and frozen config")
             lease = SelectionPitRuntimeLease.from_mapping(native.get("pit_runtime_lease")).require_trade_date(check.trade_date)
@@ -310,7 +353,8 @@ def recovery_rebuild_receipt(run: Any) -> dict[str, Any] | None:
 
 class LocalSimReplayRecoveryService:
     def __init__(self, *, repository: Any, source_authority: Any, market_provider: Any, clock=None,
-                 suspension_provider=None, process_started_at: datetime | None = None, pit_authority_resolver=None):
+                 suspension_provider=None, process_started_at: datetime | None = None, pit_authority_resolver=None,
+                 failed_evidence_root: Path = Path("X:/AIstock_temp/LOCALSIM")):
         self.repository, self.source_authority, self.market_provider = repository, source_authority, market_provider
         self.clock = clock or (lambda: datetime.now(UTC))
         if process_started_at is None:
@@ -320,6 +364,7 @@ class LocalSimReplayRecoveryService:
         self.process_started_at = process_started_at
         self.suspension_provider = suspension_provider
         self.pit_authority_resolver = pit_authority_resolver
+        self.failed_evidence_root = failed_evidence_root
         from backend.services.simulation_data.minute_provider import SimulationMinuteMarketDataProvider
 
         if suspension_provider is None and isinstance(market_provider, SimulationMinuteMarketDataProvider):
@@ -327,10 +372,10 @@ class LocalSimReplayRecoveryService:
 
             self.suspension_provider = LocalSimHistoricalSuspensionProvider(conn_factory=market_provider.conn_factory)
 
-    def inspect(self, replay_job_id: str) -> LocalSimReplayRecoveryCheckV1:
-        return self.evaluate(self.repository.get_replay_recovery_snapshot(replay_job_id))
+    def inspect(self, replay_job_id: str, *, archive_ref: str | None = None) -> LocalSimReplayRecoveryCheckV1:
+        return self.evaluate(self.repository.get_replay_recovery_snapshot(replay_job_id), archive_ref=archive_ref)
 
-    def evaluate(self, snapshot: dict[str, Any]) -> LocalSimReplayRecoveryCheckV1:
+    def evaluate(self, snapshot: dict[str, Any], *, archive_ref: str | None = None) -> LocalSimReplayRecoveryCheckV1:
         from .localsim_input_source_plan import (
             SOURCE_PLAN_ID, current_source_day, current_source_plan, frozen_source_plan, localsim_plan_inputs,
         )
@@ -360,7 +405,7 @@ class LocalSimReplayRecoveryService:
                         dataset = current_file_dataset(required=True)
                         bound.market_provider = FileMinuteMarketDataProvider(dataset)
                         bound.suspension_provider = historical_suspension_provider(dataset)
-                    return bound.evaluate(snapshot)
+                    return bound.evaluate(snapshot, archive_ref=archive_ref)
             except ValueError:
                 return self._check(snapshot, reasons=["LOCALSIM_REPLAY_RECOVERY_SOURCE_IDENTITY_CONFLICT"], native={})
         from .localsim_file_inputs import (
@@ -378,7 +423,7 @@ class LocalSimReplayRecoveryService:
                     bound = copy(self)
                     bound.market_provider = FileMinuteMarketDataProvider(dataset)
                     bound.suspension_provider = historical_suspension_provider(dataset)
-                    return bound.evaluate(snapshot)
+                    return bound.evaluate(snapshot, archive_ref=archive_ref)
             except ValueError as exc:
                 return self._check(snapshot, reasons=[getattr(exc, "context", {}).get("reason_code")
                     or "LOCALSIM_REPLAY_RECOVERY_SOURCE_IDENTITY_CONFLICT"], native={})
@@ -419,8 +464,8 @@ class LocalSimReplayRecoveryService:
                     or completed != job["completed_trade_date"] or next_day >= source.current_trading_date):
                 self._invalid("LOCALSIM_REPLAY_RECOVERY_SOURCE_IDENTITY_CONFLICT")
             if run is None:
-                native.update(self._inspect_preselection(snapshot))
-            elif run["status"] != "FAILED_RETRYABLE" or run["broker_backend"] != "local_sim":
+                native.update(self._inspect_preselection(snapshot, archive_ref=archive_ref))
+            elif archive_ref is not None or run["status"] != "FAILED_RETRYABLE" or run["broker_backend"] != "local_sim":
                 self._invalid("LOCALSIM_REPLAY_RECOVERY_DAILY_RUN_INVALID")
             if run is None:
                 return self._check(snapshot, reasons=reasons, native=native)
@@ -527,7 +572,7 @@ class LocalSimReplayRecoveryService:
             trade_date=job["next_trade_date"], economic_counts=snapshot["economic_counts"], native_input=native,
         )
 
-    def _inspect_preselection(self, snapshot: dict[str, Any]) -> dict[str, Any]:
+    def _inspect_preselection(self, snapshot: dict[str, Any], *, archive_ref: str | None = None) -> dict[str, Any]:
         """Require native identity and zero effects for supported preselection failures."""
         job, binding, release = snapshot["job"], snapshot["binding"], snapshot["release"]
         context = job.get("failure_context") or {}
@@ -535,9 +580,14 @@ class LocalSimReplayRecoveryService:
                        and context.get("message") == "supplied canonical PIT lease differs from live pointer")
         observation_panel_failure = (job["failure_code"] == "TypeError"
                                      and context.get("message") == OBSERVATION_PANEL_SIGNATURE_ERROR)
+        lines = str(context.get("message", "")).splitlines()
+        jsonb_insert = (re.fullmatch(r"""LINE 8: \.\.\.([0-9a-f]{32,64})', '\{"schema_\.\.\.""", lines[1])
+                       if job["failure_code"] == "ProgramLimitExceeded" and len(lines) >= 2
+                       and lines[0] == JSONB_LIMIT_MESSAGE else None)
         if (job["status"] != "FAILED_TERMINAL"
-                or not (pit_failure or observation_panel_failure or job["failure_code"] == "TimeoutExpired")
-                or context.get("trade_date") != job["next_trade_date"]):
+                or not (pit_failure or observation_panel_failure or jsonb_insert or job["failure_code"] == "TimeoutExpired")
+                or context.get("trade_date") != job["next_trade_date"]
+                or (archive_ref is not None and jsonb_insert is None)):
             self._invalid("LOCALSIM_REPLAY_RECOVERY_FAILURE_UNSUPPORTED")
         if (snapshot["account"].get("status") != "ACTIVE"
                 or snapshot["account"].get("account_id") != job["simulation_account_id"]
@@ -556,6 +606,30 @@ class LocalSimReplayRecoveryService:
                 or snapshot.get("evidence_hash") is not None):
             self._invalid("LOCALSIM_REPLAY_RECOVERY_PRESELECTION_ABSENCE_UNPROVEN")
         require_no_economic_effects({}, snapshot["economic_counts"], now=self.clock())
+        if jsonb_insert:
+            if archive_ref is None:
+                self._invalid("LOCALSIM_REPLAY_RECOVERY_ARCHIVE_REQUIRED")
+            from .localsim_input_source_plan import SOURCE_PLAN_ID, current_source_plan
+            from .localsim_selection_signal import read_failed_daily_evidence_archive
+            from .models import StrategyRuntimeRelease
+
+            plan = current_source_plan()
+            if (job["historical_source_id"] != SOURCE_PLAN_ID or plan is None
+                    or plan["plan_hash"] != job["historical_source_sha256"]):
+                self._invalid("LOCALSIM_REPLAY_RECOVERY_SOURCE_IDENTITY_CONFLICT")
+            try:
+                evidence, _ = read_failed_daily_evidence_archive(
+                    self.failed_evidence_root, archive_ref, release=StrategyRuntimeRelease.model_validate(release),
+                    trade_date=date.fromisoformat(job["next_trade_date"]), source_plan=plan,
+                    evidence_hash_suffix=jsonb_insert[1],
+                )
+            except FileNotFoundError:
+                self._invalid("LOCALSIM_REPLAY_RECOVERY_ARCHIVE_MISSING")
+            except (OSError, KeyError, TypeError, ValueError):
+                self._invalid("LOCALSIM_REPLAY_RECOVERY_ARCHIVE_IDENTITY_CONFLICT")
+            return {"recovery_phase": "PRESELECTION", "candidate_run_id": absence["run_id"],
+                    "recovery_reason": JSONB_EVIDENCE_RECOVERY_REASON, "archive_ref": archive_ref,
+                    "source_plan_hash": plan["plan_hash"], "original_evidence_hash": evidence["artifact_hash"]}
         if observation_panel_failure:
             return {"recovery_phase": "PRESELECTION", "candidate_run_id": absence["run_id"],
                     "recovery_reason": OBSERVATION_PANEL_RECOVERY_REASON}
@@ -602,7 +676,9 @@ class LocalSimReplayRecoveryService:
     def recover(self, replay_job_id: str, request: LocalSimReplayRecoverRequestV1):
         return self.repository.recover_terminal_replay(
             replay_job_id=replay_job_id, expected_version=request.expected_version,
-            expected_snapshot_sha256=request.snapshot_sha256, evaluate=self.evaluate, updated_at=self.clock(),
+            expected_snapshot_sha256=request.snapshot_sha256,
+            evaluate=partial(self.evaluate, archive_ref=request.archive_ref) if request.archive_ref else self.evaluate,
+            updated_at=self.clock(),
         )
 
     @staticmethod

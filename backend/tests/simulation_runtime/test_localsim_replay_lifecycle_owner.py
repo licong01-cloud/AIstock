@@ -473,3 +473,45 @@ def test_paused_replay_waits_without_mutating_cursor_or_recovering_failure():
     assert outcome["eligible_job_count"] == 0
     assert executed == []
     assert repo.get_replay_job(job.replay_job_id) == job
+
+def test_archived_selection_receipt_survives_retry_and_is_scoped_to_failed_day():
+    from backend.services.simulation_runtime.localsim_replay_recovery import (
+        JSONB_EVIDENCE_RECOVERY_REASON, PRESELECTION_RECOVERY_KEY, current_localsim_evidence_resume,
+    )
+    from backend.services.simulation_runtime.models import canonical_json_sha256
+
+    repository = InMemoryLocalSimSuccessorRepository()
+    _, _, job = _replay(repository)
+    resume_day = DAYS[1]
+    receipt = {"replay_job_id": job.replay_job_id, "binding_id": job.binding_id, "release_id": job.release_id,
+               "trade_date": str(resume_day), "native_input": {"recovery_reason": JSONB_EVIDENCE_RECOVERY_REASON,
+                                                               "source_plan_hash": job.historical_source_sha256}}
+    receipt["receipt_sha256"] = canonical_json_sha256(receipt)
+    job = repository.transition_replay_job(replay_job_id=job.replay_job_id, expected_version=job.version,
+        update={"status": LocalSimReplayStatus.FAILED_RETRYABLE, "completed_trade_date": DAYS[0],
+                "next_trade_date": resume_day, "failure_code": "ProgramLimitExceeded",
+                "failure_context": {PRESELECTION_RECOVERY_KEY: receipt}}, updated_at=NOW)
+    calls = []
+
+    def execute(current, day):
+        calls.append((day, current_localsim_evidence_resume()))
+        if len(calls) == 1:
+            raise DataUnavailableError("injected interruption after receipt was activated")
+
+    runner = LocalSimHistoricalDayRunner(historical_source_id=SOURCE_ID, historical_source_sha256=SOURCE_SHA256,
+                                          run_day=execute)
+    coordinator = LocalSimReplayCoordinator(repository=repository, historical_day_runner=runner, clock=lambda: NOW)
+
+    def advance(job):
+        return coordinator.run_next_batch(replay_job_id=job.replay_job_id, expected_version=job.version, trading_days=DAYS,
+                                   current_trading_date=NOW.date(), max_days=2)
+
+    with pytest.raises(DataUnavailableError):
+        advance(job)
+    job = repository.get_replay_job(job.replay_job_id)
+    assert job.failure_context[PRESELECTION_RECOVERY_KEY] == receipt
+    assert job.next_trade_date == resume_day
+    job = advance(job)
+    assert calls == [(resume_day, receipt), (resume_day, receipt), (DAYS[2], None)]
+    assert job.completed_trade_date == DAYS[2] and job.failure_context is None
+    assert current_localsim_evidence_resume() is None

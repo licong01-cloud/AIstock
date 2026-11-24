@@ -1,14 +1,15 @@
 {
   "actual": "OLD5 下一日 2026-11-02，UPDATED3 下一日 2026-11-19，两任务均为 FAILED_TERMINAL。",
   "allowed_write_scope": [
-    "backend/services/simulation_runtime/localsim_selection_signal.py",
-    "backend/services/simulation_runtime/localsim_replay_recovery.py",
-    "backend/services/simulation_runtime/localsim_replay.py",
-    "backend/services/simulation_runtime/localsim_product_control.py",
     "backend/routers/simulation_runtime.py",
-    "backend/tests/simulation_runtime/test_localsim_shared_selection_signal.py",
-    "backend/tests/simulation_runtime/test_localsim_replay_recovery.py",
+    "backend/services/simulation_runtime/localsim_file_inputs.py",
+    "backend/services/simulation_runtime/localsim_product_control.py",
+    "backend/services/simulation_runtime/localsim_replay.py",
+    "backend/services/simulation_runtime/localsim_replay_recovery.py",
+    "backend/services/simulation_runtime/localsim_selection_signal.py",
     "backend/tests/simulation_runtime/test_localsim_replay_lifecycle_owner.py",
+    "backend/tests/simulation_runtime/test_localsim_replay_recovery.py",
+    "backend/tests/simulation_runtime/test_localsim_shared_selection_signal.py",
     "tests/aistock_validation/bugs/20261124_BUG-2283-localsim-jsonb.json"
   ],
   "assigned_agent": null,
@@ -30,20 +31,23 @@
     }
   ],
   "evidence_uris": [
-    "X:/AIstock_temp/LOCALSIM/shared-history-native-acceptance-20261124T0700Z/original-recovery-readiness.json"
+    "X:/AIstock_temp/LOCALSIM/shared-history-native-acceptance-20261124T0700Z/original-recovery-readiness.json",
+    "X:/AIstock_temp/LOCALSIM/bug-2283-jsonb-proof/native-repair-fresh-process.json",
+    "X:/AIstock_temp/LOCALSIM/bug-2283-jsonb-proof/exact-original-input-readback.json"
   ],
   "expected": "历史恢复沿原账户、原数据源和原游标续跑。兼容已入库证据及精确重试。",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [
-      "backend/services/simulation_runtime/localsim_selection_signal.py",
-      "backend/services/simulation_runtime/localsim_replay_recovery.py",
-      "backend/services/simulation_runtime/localsim_replay.py",
-      "backend/services/simulation_runtime/localsim_product_control.py",
       "backend/routers/simulation_runtime.py",
-      "backend/tests/simulation_runtime/test_localsim_shared_selection_signal.py",
+      "backend/services/simulation_runtime/localsim_file_inputs.py",
+      "backend/services/simulation_runtime/localsim_product_control.py",
+      "backend/services/simulation_runtime/localsim_replay.py",
+      "backend/services/simulation_runtime/localsim_replay_recovery.py",
+      "backend/services/simulation_runtime/localsim_selection_signal.py",
+      "backend/tests/simulation_runtime/test_localsim_replay_lifecycle_owner.py",
       "backend/tests/simulation_runtime/test_localsim_replay_recovery.py",
-      "backend/tests/simulation_runtime/test_localsim_replay_lifecycle_owner.py"
+      "backend/tests/simulation_runtime/test_localsim_shared_selection_signal.py"
     ],
     "changed_files_source": "planned_intake",
     "ownership": {
@@ -165,25 +169,27 @@
       "unmatched_files": []
     },
     "planned_files": [
-      "backend/services/simulation_runtime/localsim_selection_signal.py",
-      "backend/services/simulation_runtime/localsim_replay_recovery.py",
-      "backend/services/simulation_runtime/localsim_replay.py",
-      "backend/services/simulation_runtime/localsim_product_control.py",
       "backend/routers/simulation_runtime.py",
-      "backend/tests/simulation_runtime/test_localsim_shared_selection_signal.py",
+      "backend/services/simulation_runtime/localsim_file_inputs.py",
+      "backend/services/simulation_runtime/localsim_product_control.py",
+      "backend/services/simulation_runtime/localsim_replay.py",
+      "backend/services/simulation_runtime/localsim_replay_recovery.py",
+      "backend/services/simulation_runtime/localsim_selection_signal.py",
+      "backend/tests/simulation_runtime/test_localsim_replay_lifecycle_owner.py",
       "backend/tests/simulation_runtime/test_localsim_replay_recovery.py",
-      "backend/tests/simulation_runtime/test_localsim_replay_lifecycle_owner.py"
+      "backend/tests/simulation_runtime/test_localsim_shared_selection_signal.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
-      "backend/services/simulation_runtime/localsim_selection_signal.py",
-      "backend/services/simulation_runtime/localsim_replay_recovery.py",
-      "backend/services/simulation_runtime/localsim_replay.py",
-      "backend/services/simulation_runtime/localsim_product_control.py",
       "backend/routers/simulation_runtime.py",
-      "backend/tests/simulation_runtime/test_localsim_shared_selection_signal.py",
+      "backend/services/simulation_runtime/localsim_file_inputs.py",
+      "backend/services/simulation_runtime/localsim_product_control.py",
+      "backend/services/simulation_runtime/localsim_replay.py",
+      "backend/services/simulation_runtime/localsim_replay_recovery.py",
+      "backend/services/simulation_runtime/localsim_selection_signal.py",
+      "backend/tests/simulation_runtime/test_localsim_replay_lifecycle_owner.py",
       "backend/tests/simulation_runtime/test_localsim_replay_recovery.py",
-      "backend/tests/simulation_runtime/test_localsim_replay_lifecycle_owner.py"
+      "backend/tests/simulation_runtime/test_localsim_shared_selection_signal.py"
     ]
   },
   "first_seen_at": "2026-11-24T16:46:53.876256Z",
@@ -209,11 +215,21 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/localsim/replays/lsreplay_2496a2053dce8ffc/recovery?archive_ref=429e762765de74ba3c17c50a088c73a654de92be164d05949dac4bec7a1ca5df/lsselection_0aed0c6c2c124b869c09fde3d211acd0/c519f8621653fece628dcb7600627a40984544114df121ab404f6435e95224df",
+    "fresh_process_evidence": [
+      "Fresh candidate process inspected both actual original replay snapshots in read-only transactions. The failed archive bytes, source plan, date, terminal insert hash and absence of economic effects were verified. The isolated native writer stored the same selected rows from 263032997/385889028-byte originals in 471735/471485-byte compact evidence rows, no inference calls, and zero additional commits on exact retry. Receipt SHA256 1d39f1f54d12b845853c2e33828cf16b276c9eff93862b25da9c62aa00db62d1.",
+      "Three existing DEV recovery transactions passed, including the new exact JSONB path, writer-lock conflict, snapshot/version CAS, unchanged cursors, zero economic rows and rollback."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",

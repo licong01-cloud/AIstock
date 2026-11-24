@@ -1,15 +1,18 @@
 """LocalSIM's thin, independent consumer of the common selection signal kernel.
 
-Full native raw artifacts are published inside the existing daily-evidence
-transaction. The global raw-artifact repository is never a discovery/cache path.
+Planned historical evidence binds a full raw artifact stored by the owning
+selection attempt before committing a compact daily-evidence row.
 Account/order/ledger commits remain entirely with the original lifecycle.
 """
 
 from __future__ import annotations
 
 from copy import copy, deepcopy
+from dataclasses import replace
+from datetime import date
 import hashlib
 import json
+import re
 from pathlib import Path
 from uuid import uuid4
 
@@ -17,7 +20,7 @@ import psycopg2.extras
 
 from backend.db.pg_pool import get_conn
 from backend.services.advisory_historical_range.selection_signal_kernel import (
-    SelectionSignalBatchError, SelectionSignalKernel, SelectionSignalRequestV1,
+    SelectionSignalBatchError, SelectionSignalDayV1, SelectionSignalKernel, SelectionSignalRequestV1,
 )
 from backend.services.advisory_historical_range.inference_session import inference_output_lease
 from backend.services.selection_center.hmm_runtime import SectorHMMRuntime
@@ -243,6 +246,130 @@ class LocalSimKernelComputation:
         return result.computation
 
 
+_ARCHIVE_OWNER = r"[0-9a-f]{64}/lsselection_[0-9a-f]{32}"
+
+
+def _owned_evidence_path(root: Path, identity: str, run_id: str, directory: str, package_id: str) -> Path:
+    root = root.resolve()
+    if re.fullmatch(_ARCHIVE_OWNER, f"{identity}/{run_id}") is None:
+        raise ValueError("invalid LocalSIM evidence owner")
+    package_key = hashlib.sha256(package_id.encode()).hexdigest()
+    expected = root / identity / run_id / directory / (package_key + ".json")
+    if expected.resolve() != expected or not expected.is_relative_to(root):
+        raise ValueError("LocalSIM evidence path escaped its owning attempt")
+    return expected
+
+
+def read_localsim_evidence_raw(owner, *, root: Path | None, package_id: str) -> SelectionScoreArtifact:
+    ref = owner.get("raw_artifact_ref")
+    if ref is None:
+        return SelectionScoreArtifact.model_validate(owner.get("raw_artifact", {}))
+    if root is None or owner.get("consumer_scope") != "LOCALSIM" or "raw_artifact" in owner:
+        raise ValueError("LocalSIM raw evidence has conflicting storage ownership")
+    path = _owned_evidence_path(root, owner["request_identity"], owner["run_id"], "raw_artifacts", package_id)
+    try:
+        data = path.read_bytes()
+    except FileNotFoundError as exc:
+        raise DataUnavailableError("committed LocalSIM raw artifact is unavailable", context={
+            "reason_code": "LOCALSIM_RAW_ARTIFACT_UNAVAILABLE", "run_id": owner["run_id"], "package_id": package_id,
+        }) from exc
+    if (ref["path"] != path.relative_to(root.resolve()).as_posix() or ref["bytes"] != len(data)
+            or hashlib.sha256(data).hexdigest() != ref["sha256"]):
+        raise ValueError("LocalSIM raw evidence does not match its committed content reference")
+    artifact = SelectionScoreArtifact.model_validate_json(data)
+    if artifact.package_id != package_id or artifact.artifact_payload_sha256 != ref["artifact_payload_sha256"]:
+        raise ValueError("LocalSIM raw artifact identity differs from committed evidence")
+    return artifact
+
+
+def _write_owned_raw(scope, owner, artifact):
+    root = scope.root.parent.parent.resolve()
+    path = _owned_evidence_path(root, scope.root.parent.name, scope.run_id, "raw_artifacts", artifact.package_id)
+    if path.exists():
+        raise FileExistsError("LocalSIM raw artifact already exists in this new attempt")
+    _atomic_json(path, artifact.model_dump(mode="json"))
+    with path.open("rb") as stream:
+        sha = hashlib.file_digest(stream, "sha256").hexdigest()
+    owner["raw_artifact_ref"] = {
+        "path": path.relative_to(root).as_posix(), "bytes": path.stat().st_size,
+        "sha256": sha, "artifact_payload_sha256": artifact.artifact_payload_sha256,
+    }
+
+
+def read_failed_daily_evidence_archive(root, ref, *, release, trade_date, source_plan, evidence_hash_suffix):
+    """Admit the original journaled evidence for the exact failed native insert."""
+    from .localsim_input_source_plan import day_route, validate_artifact_source
+    from .localsim_replay_recovery import FAILED_EVIDENCE_ARCHIVE_PATTERN
+
+    if re.fullmatch(FAILED_EVIDENCE_ARCHIVE_PATTERN, ref) is None:
+        raise ValueError("invalid LocalSIM failed evidence reference")
+    identity, run_id, expected_sha = ref.split("/")
+    intent_path = _owned_evidence_path(root, identity, run_id, "evidence", release.package_id)
+    failure_path = intent_path.parent.parent / "failure.json"
+    if failure_path.resolve() != failure_path or (intent_path.parent.parent / "completion.json").exists():
+        raise ValueError("LocalSIM failed archive is not an uncommitted attempt")
+    failure = json.loads(failure_path.read_bytes())
+    route = day_route(source_plan, trade_date)
+    clocks = SelectionSignalDayV1(*(date.fromisoformat(route[key]) for key in
+        ("decision_date", "data_cutoff", "target_trade_date")))
+    if (failure.get("status") != "FAILED" or failure.get("consumer_scope") != "LOCALSIM"
+            or failure.get("run_id") != run_id or failure.get("error_type") != "ProgramLimitExceeded"
+            or failure.get("failed_stage") != "native_daily_evidence_transaction"
+            or failure.get("clocks") != clocks.to_dict()
+            or any(entry.get("stage") == "native_daily_evidence_transaction" for entry in failure["completed_prefix"])):
+        raise ValueError("LocalSIM failure journal does not prove the failed native write")
+    data = intent_path.read_bytes()
+    if hashlib.sha256(data).hexdigest() != expected_sha:
+        raise ValueError("LocalSIM failed evidence bytes changed")
+    document = json.loads(data)
+    del data
+    payload = document["evidence_payload_json"]
+    owner = payload["localsim_signal_run"]
+    artifact = SelectionScoreArtifact.model_validate(owner["raw_artifact"])
+    projection = owner["projection"]
+    if (canonical_json_sha256(payload) != document["artifact_hash"]
+            or not document["artifact_hash"].endswith(evidence_hash_suffix)
+            or document["evidence_id"] != "dse_" + document["artifact_hash"][:16]
+            or document["package_id"] != release.package_id or document["manifest_sha256"] != release.manifest_sha256
+            or document["release_id"] != release.release_id or document["release_hash"] != release.release_hash
+            or document["runtime_profile_version_id"] != release.runtime_profile_version_id
+            or document["runtime_profile_hash"] != release.runtime_profile_sha256
+            or document["target_trade_date"] != str(trade_date) or document["cutoff_date"] != str(clocks.data_cutoff)
+            or owner.get("consumer_scope") != "LOCALSIM" or owner.get("run_id") != run_id
+            or owner.get("request_identity") != identity or owner.get("clocks") != clocks.to_dict()
+            or owner.get("suspension_policy_identity") != localsim_suspension_policy_identity()
+            or owner.get("projection_sha256") != canonical_json_sha256(projection)
+            or set(projection["package_results"]) != {release.package_id}
+            or projection["manifest_sha256_by_package"] != {release.package_id: release.manifest_sha256}
+            or artifact.package_id != release.package_id or artifact.manifest_sha256 != release.manifest_sha256
+            or artifact.trade_date != trade_date or artifact.data_source != "DB_HISTORICAL"
+            or StrategyPackageSelectionArtifactRepository._with_digest(artifact).artifact_payload_sha256
+                != artifact.artifact_payload_sha256):
+        raise ValueError("LocalSIM failed evidence does not match the original release, day or insert identity")
+    raw_owner = artifact.metadata.get("localsim_signal_run") or {}
+    if (raw_owner.get("consumer_scope") != "LOCALSIM" or raw_owner.get("run_id") != run_id
+            or raw_owner.get("clocks") != clocks.to_dict()):
+        raise ValueError("LocalSIM failed raw evidence has different ownership")
+    validate_artifact_source(source_plan, clocks, artifact)
+    del owner["raw_artifact"]
+    return document, artifact
+
+
+def _persist_owned_evidence(repository, evidence, payload, scope):
+    digest = canonical_json_sha256(payload)
+    prepared = DailySelectionEvidence.model_validate({**evidence,
+        "evidence_id": f"dse_{digest[:16]}", "artifact_hash": digest, "evidence_payload_json": payload})
+    # Publish the intent before the database write. Recovery reads the exact
+    # native row, including after a crash between commit and checkpoint.
+    _atomic_json(scope.root / "evidence" / (hashlib.sha256(prepared.package_id.encode()).hexdigest() + ".json"),
+                 prepared.model_dump(mode="json"))
+    stored = repository.save_daily_selection_evidence(prepared)
+    _require_owned_evidence(stored, prepared, scope.run_id)
+    scope.completed_prefix.append({"stage": "native_daily_evidence_transaction", "package_id": stored.package_id,
+                                   "evidence_id": stored.evidence_id, "artifact_hash": stored.artifact_hash})
+    return stored
+
+
 class LocalSimDailyEvidenceWriter:
     def __init__(self, repository):
         self.repository = repository
@@ -260,26 +387,19 @@ class LocalSimDailyEvidenceWriter:
             "clocks": scope.clocks.to_dict(), "semantic_identity": common.semantic_identity,
             "storage_identity": common.storage_identity, "membership_status": common.membership_status[evidence.package_id],
             "unscored_members": list(common.unscored_members[evidence.package_id]),
-            "raw_artifact": artifact.model_dump(mode="json"),
             "projection": projection, "projection_sha256": canonical_json_sha256(projection),
             "request_identity": scope.root.parent.name,
         }
+        owner = payload["localsim_signal_run"]
+        if scope.source_plan is None:
+            owner["raw_artifact"] = artifact.model_dump(mode="json")
+        else:
+            _write_owned_raw(scope, owner, artifact)
         raw_owner = artifact.metadata.get("localsim_signal_run", {})
         if raw_owner.get("run_id") != scope.run_id:
             payload["localsim_signal_run"]["reused_raw_run_id"] = raw_owner.get("run_id")
-        digest = canonical_json_sha256(payload)
-        prepared = DailySelectionEvidence.model_validate({**evidence.model_dump(mode="json"),
-                                                         "evidence_id": f"dse_{digest[:16]}", "artifact_hash": digest,
-                                                         "evidence_payload_json": payload})
-        # Intent is durable BEFORE the native transaction. A crash after commit
-        # is recovered only by reading this exact owned evidence ID from writer.
-        _atomic_json(scope.root / "evidence" / (hashlib.sha256(evidence.package_id.encode()).hexdigest() + ".json"),
-                     prepared.model_dump(mode="json"))
-        stored = self.repository.save_daily_selection_evidence(prepared)
-        _require_owned_evidence(stored, prepared, scope.run_id)
-        scope.completed_prefix.append({"stage": "native_daily_evidence_transaction", "package_id": stored.package_id,
-                                       "evidence_id": stored.evidence_id, "artifact_hash": stored.artifact_hash})
-        return stored
+        return _persist_owned_evidence(self.repository, evidence.model_dump(mode="json", exclude={"evidence_payload_json"}),
+                                       payload, scope)
 
 
 def _require_owned_evidence(stored, expected, run_id):
@@ -356,6 +476,8 @@ class LocalSimSelectionSignalService(StrategyPackageSelectionService):
             bound._file_bound = True
             return bound.run_selection(**kwargs)
         recovery_evidence = kwargs.pop("recovery_evidence", None)
+        from .localsim_replay_recovery import current_localsim_evidence_resume
+        archive_resume = current_localsim_evidence_resume()
         if kwargs.get("prospective_context") is not None:
             raise ValueError("LocalSIM consumer uses its own daily evidence, not an Advisory prospective writer")
         trade_date = kwargs["trade_date"]
@@ -373,6 +495,13 @@ class LocalSimSelectionSignalService(StrategyPackageSelectionService):
                 raise DataUnavailableError("file mode does not cover a requested native risk provider", context={
                     "reason_code": "FROZEN_DATASET_RISK_POLICY_UNCOVERED"})
         release = kwargs.get("runtime_release")
+        if archive_resume is not None and (
+            source_plan is None or recovery_evidence is not None or release is None
+            or archive_resume["trade_date"] != str(trade_date) or archive_resume["release_id"] != release.release_id
+            or archive_resume["native_input"]["source_plan_hash"] != source_plan["plan_hash"]
+            or kwargs["package_ids"] != [release.package_id]
+        ):
+            raise InvalidStateTransitionError("LocalSIM archived selection recovery scope changed")
         identities = {p: self.package_repository.get(p).manifest_sha256 for p in kwargs["package_ids"]}
         identity = canonical_json_sha256({"packages": identities, "date": trade_date.isoformat(), "source": kwargs["data_source"],
                                           "localsim_suspension_policy": localsim_suspension_policy_identity(),
@@ -382,6 +511,8 @@ class LocalSimSelectionSignalService(StrategyPackageSelectionService):
                                          **({"source_plan_hash": source_plan["plan_hash"]} if source_plan else {}),
                                          "release": getattr(release, "release_hash", None),
                                           "recovery_evidence": getattr(recovery_evidence, "artifact_hash", None),
+                                          **({"failed_evidence_archive": archive_resume["native_input"]["archive_ref"]}
+                                             if archive_resume is not None else {}),
                                           "code": dict(_LOADED_SELECTION_CODE_IDENTITY)})
         logical_root = self.temporary_root / identity
         logical_root.mkdir(parents=True, exist_ok=True)
@@ -389,8 +520,8 @@ class LocalSimSelectionSignalService(StrategyPackageSelectionService):
             recovered = self._recover(logical_root, identity, expected_package_ids=kwargs["package_ids"])
             if recovered is not None:
                 return recovered
-            # Uncommitted DB input has no immutable revision guarantee. A retry
-            # gets its own run and recomputes, retaining the original failure.
+            # Ordinary uncommitted DB work is still recomputed. A failed insert
+            # can carry the exact archived result admitted by replay recovery.
             run_id = "lsselection_" + uuid4().hex
             root = logical_root / run_id
             root.mkdir()
@@ -402,7 +533,6 @@ class LocalSimSelectionSignalService(StrategyPackageSelectionService):
             from backend.services.advisory_historical_range.selection_signal_kernel import SelectionSignalDayV1
             scope = LocalSimInferenceScope(run_id, root, SelectionSignalDayV1(trade_date, cutoff or trade_date, trade_date), {})
             if source_plan is not None:
-                from datetime import date
                 from .localsim_input_source_plan import day_route
                 route = day_route(source_plan, trade_date)
                 planned_clocks = SelectionSignalDayV1(*(date.fromisoformat(route[key]) for key in
@@ -432,7 +562,10 @@ class LocalSimSelectionSignalService(StrategyPackageSelectionService):
             _atomic_json(logical_root / "attempt.json", {"identity": identity, "consumer_scope": "LOCALSIM", "run_id": run_id,
                                                         "package_ids": kwargs["package_ids"]})
             try:
-                result = super().run_selection(**native_kwargs)
+                if archive_resume is None:
+                    result = super().run_selection(**native_kwargs)
+                else:
+                    result = self._commit_failed_archive(scope, release=release, recovery=archive_resume)
                 scope.result = result
                 _atomic_json(root / "completion.json", {"consumer_scope": "LOCALSIM", "run_id": run_id, "identity": identity,
                                                         "status": "SIGNAL_COMMITTED", "clocks": scope.clocks.to_dict()})
@@ -456,6 +589,28 @@ class LocalSimSelectionSignalService(StrategyPackageSelectionService):
             finally:
                 LOCALSIM_INFERENCE_SCOPE.reset(token)
 
+    def _commit_failed_archive(self, scope, *, release, recovery):
+        native = recovery["native_input"]
+        evidence, artifact = read_failed_daily_evidence_archive(
+            self.temporary_root, native["archive_ref"], release=release, trade_date=scope.clocks.decision_date,
+            source_plan=scope.source_plan, evidence_hash_suffix=native["original_evidence_hash"],
+        )
+        payload = evidence.pop("evidence_payload_json")
+        owner = payload["localsim_signal_run"]
+        projection = owner["projection"]
+        owner.update(run_id=scope.run_id, request_identity=scope.root.parent.name,
+                     reused_raw_run_id=artifact.metadata["localsim_signal_run"]["run_id"],
+                     original_evidence_hash=evidence["artifact_hash"])
+        result = self._projected_result(projection, {}, {evidence["package_id"]: artifact})
+        scope.stage = "native_daily_evidence_transaction"
+        _atomic_json(scope.root / "projection.json", projection)
+        _write_owned_raw(scope, owner, artifact)
+        stored = _persist_owned_evidence(self.native_repository, evidence, payload, scope)
+        stored_by_package = {stored.package_id: stored}
+        return replace(result, evidence_by_package=stored_by_package, runtime_config=self._attach_evidence_refs(
+            projection["runtime_config"], stored_by_package, capture_receipt=result.evidence_capture_receipt,
+        ))
+
     def _recovery_raw(self, evidence, *, kwargs, clocks):
         stored = self.native_repository.get_daily_selection_evidence(evidence.evidence_id)
         # Evidence freezes arrays as tuples. Restore its canonical JSON shape
@@ -472,7 +627,7 @@ class LocalSimSelectionSignalService(StrategyPackageSelectionService):
                 or self.selection_artifact_config(kwargs.get("runtime_config") or {}).get("force_regenerate")):
             raise InvalidStateTransitionError("LocalSIM recovery raw evidence is not the exact native frozen input",
                                               context={"reason_code": "LOCALSIM_FROZEN_RAW_EVIDENCE_CONFLICT"})
-        artifact = SelectionScoreArtifact.model_validate(owner.get("raw_artifact", {}))
+        artifact = read_localsim_evidence_raw(owner, root=getattr(self, "temporary_root", None), package_id=stored.package_id)
         dataset = current_file_dataset()
         if dataset is not None and artifact.metadata.get("localsim_signal_run", {}).get("file_binding_hash") != dataset.identity:
             raise InvalidStateTransitionError("LocalSIM frozen raw file identity differs from this replay")
@@ -531,25 +686,24 @@ class LocalSimSelectionSignalService(StrategyPackageSelectionService):
             if stored.evidence_payload_json["localsim_signal_run"].get("projection_sha256") != canonical_json_sha256(projection):
                 raise ValueError("LocalSIM projection content differs from its native committed evidence")
             evidence[package_id] = stored
-        if has_canonical_pit_runtime_profile(projection["runtime_config"]):
-            # Original admission rejects a PIT generation change; recovery must
-            # not bypass that native guard merely because evidence committed.
-            require_canonical_pit_generation_current(projection["runtime_config"], authority_resolver=self.pit_authority_resolver)
-        # The immutable evidence envelope freezes JSON arrays as tuples. Decode
-        # its canonical JSON shape so a recovered artifact exactly matches the
-        # freshly committed native artifact, including nested metadata arrays.
-        artifacts = {p: SelectionScoreArtifact.model_validate(v.model_dump(mode="json")["evidence_payload_json"]["localsim_signal_run"]["raw_artifact"])
-                     for p, v in evidence.items()}
+        artifacts = {p: read_localsim_evidence_raw(
+            v.model_dump(mode="json")["evidence_payload_json"]["localsim_signal_run"], root=logical_root.parent, package_id=p,
+        ) for p, v in evidence.items()}
         from .localsim_input_source_plan import current_source_plan, day_route, validate_artifact_source
         plan = current_source_plan()
         if plan is not None:
-            from datetime import date
-            from backend.services.advisory_historical_range.selection_signal_kernel import SelectionSignalDayV1
             route = day_route(plan, next(iter(evidence.values())).target_trade_date)
             clocks = SelectionSignalDayV1(*(date.fromisoformat(route[key]) for key in
                 ("decision_date", "data_cutoff", "target_trade_date")))
             for artifact in artifacts.values():
                 validate_artifact_source(plan, clocks, artifact)
+        result = self._projected_result(projection, evidence, artifacts)
+        _atomic_json(logical_root / "checkpoint.json", {**marker, "status": "SIGNAL_COMMITTED", "recovery": "NATIVE_EVIDENCE_READBACK"})
+        return result
+
+    def _projected_result(self, projection, evidence, artifacts):
+        if has_canonical_pit_runtime_profile(projection["runtime_config"]):
+            require_canonical_pit_generation_current(projection["runtime_config"], authority_resolver=self.pit_authority_resolver)
         package_results = {p: [SelectionCandidate.model_validate(v) for v in rows] for p, rows in projection["package_results"].items()}
         traces = {p: SelectionStageTrace.model_validate(v) for p, v in projection["stage_trace_by_package"].items()}
         # Scheduler binds one package. Aggregate projection is stored by the
@@ -557,12 +711,10 @@ class LocalSimSelectionSignalService(StrategyPackageSelectionService):
         aggregate = [SelectionCandidate.model_validate(v) for v in projection["aggregate_results"]]
         capture = ProspectiveSelectionEvidenceAssembler.not_requested_receipt()
         config = self._attach_evidence_refs(projection["runtime_config"], evidence, capture_receipt=capture)
-        result = StrategyPackageSelectionResult(
+        return StrategyPackageSelectionResult(
             runtime_config=config, package_results=package_results, aggregate_results=aggregate,
             excluded_results={p: [SelectionExclusion.model_validate(v) for v in rows] for p, rows in projection["excluded_results"].items()},
             manifest_sha256_by_package=projection["manifest_sha256_by_package"], evidence_by_package=evidence,
             valid_no_candidate=projection["valid_no_candidate"], no_candidate_reason=projection["no_candidate_reason"],
             stage_trace_by_package=traces, evidence_capture_receipt=capture, score_artifacts_by_package=artifacts,
         )
-        _atomic_json(logical_root / "checkpoint.json", {**marker, "status": "SIGNAL_COMMITTED", "recovery": "NATIVE_EVIDENCE_READBACK"})
-        return result

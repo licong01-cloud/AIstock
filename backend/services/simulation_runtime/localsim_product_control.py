@@ -593,9 +593,10 @@ class LocalSimProductControlPlaneService:
         )
         return LocalSimControlResponseV1(replay=replay)
 
-    def inspect_replay_recovery(self, replay_job_id: str):
+    def inspect_replay_recovery(self, replay_job_id: str, *, archive_ref: str | None = None):
         self.readiness.require_replay_recovery_ready()
-        return self._require_replay_recovery().inspect(replay_job_id)
+        recovery = self._require_replay_recovery()
+        return recovery.inspect(replay_job_id, archive_ref=archive_ref) if archive_ref else recovery.inspect(replay_job_id)
 
     def recover_replay(self, replay_job_id: str, request: Any) -> LocalSimControlResponseV1:
         self.readiness.require_replay_recovery_ready()
