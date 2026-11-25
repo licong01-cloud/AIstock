@@ -16,7 +16,6 @@ from .canonical_equity_pit import (
     CANONICAL_PIT_IPO_TRADING_SESSIONS,
     CANONICAL_PIT_RULE_VERSION,
     CANONICAL_PIT_SCOPE,
-    CANONICAL_PIT_TERMINAL_EVIDENCE_CONTRACT,
     CANONICAL_PIT_UNIVERSE_KEY,
     CanonicalPitAuthorityResolver,
     PitConsumerBinding,
@@ -221,35 +220,47 @@ class StockUniversePitService:
         state = self.get_status_readonly(universe_key=CANONICAL_PIT_UNIVERSE_KEY)
         if state.get("status") != "ready" or state.get("dirty"):
             return {"status": "waiting", "reason": "published_canonical_not_ready", "rebuilt": False}
-        if dt.date.fromisoformat(str(state["end_date"])[:10]) >= end:
+        published_end = state["end_date"]
+        summary = state.get("last_build_summary") or {}
+        source_through = dt.date.fromisoformat(
+            summary.get("live_projection", {}).get("source_through", published_end.isoformat())
+        )
+        if published_end > end or (published_end == end and source_through == end):
             return {"status": "ready", "reason": "already_current", "rebuilt": False}
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT MAX(cal_date)::date FROM market.trading_calendar "
-                            "WHERE is_trading=TRUE AND cal_date < %s", (end,))
-                row = cur.fetchone()
-        if not row or not row[0]:
-            raise StockUniversePitError("previous trading day is missing")
-        source_end = row[0]
+
         from .data_refresh_audit import DataRefreshAuditRepository
+        from .trading_core.errors import DataUnavailableError
+
         audit = DataRefreshAuditRepository()
-        # stock_basic is a static lifecycle table, not a dated refresh-audit
-        # stream. The existing lifecycle audit validates it in the builder.
-        for dataset in ("stock_st", "stock_st_events"):
-            audit.require_success(dataset=dataset, trade_date=source_end)
-        source = self.compute_source_fingerprint(end_date=source_end, include_canonical_terminal_events=True)
+        try:
+            audit.require_success(dataset="stock_st", trade_date=end, data_source="canonical_db")
+            source_end = end
+        except DataUnavailableError:
+            if published_end == end:
+                return {"status": "ready", "reason": "projected_from_last_snapshot", "rebuilt": False}
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT MAX(cal_date)::date FROM market.trading_calendar "
+                                "WHERE is_trading=TRUE AND cal_date < %s", (end,))
+                    row = cur.fetchone()
+            if not row or not row[0]:
+                raise StockUniversePitError("previous trading day is missing")
+            source_end = row[0]
+            audit.require_success(dataset="stock_st", trade_date=source_end, data_source="canonical_db")
+
+        source = self.compute_source_fingerprint(end_date=source_end, canonical_snapshots=True)
         return self._rebuild_st_pit_universe(
             universe_key=CANONICAL_PIT_UNIVERSE_KEY, start_date=state["start_date"], end_date=end,
             rule_version=CANONICAL_PIT_RULE_VERSION, scope=CANONICAL_PIT_SCOPE,
             ipo_filter_days=CANONICAL_PIT_IPO_TRADING_SESSIONS, ipo_filter_unit="trading_sessions",
-            include_canonical_terminal_events=True, source_fingerprint=source,
+            canonical_snapshots=True, source_fingerprint=source,
             source_fingerprint_sha256=_fingerprint_sha256(source), refresh_policy="source_fingerprint",
-            write_mode="incremental", incremental_from=state["end_date"] + dt.timedelta(days=1),
+            write_mode="incremental", incremental_from=source_through + dt.timedelta(days=1),
             live_source_end_date=source_end, dry_run=dry_run,
         )
 
     def compute_source_fingerprint(
-        self, *, end_date: dt.date | None = None, include_canonical_terminal_events: bool = False
+        self, *, end_date: dt.date | None = None, canonical_snapshots: bool = False
     ) -> dict[str, Any]:
         fingerprint_end = end_date or self.resolve_default_end_date()
         # BUG-927: fingerprint scope must match the span builder exactly
@@ -294,20 +305,22 @@ class StockUniversePitService:
                     (fingerprint_end,),
                 )
                 stock_st = dict(cur.fetchone() or {})
-                cur.execute(
-                    f"""
-                    SELECT
-                        COUNT(*) AS row_count,
-                        MAX(pub_date)::date AS max_pub_date,
-                        MAX(imp_date)::date AS max_imp_date,
-                        MAX(ingested_at) AS max_ingested_at
-                      FROM market.stock_st_events
-                     WHERE pub_date::date <= %s
-                       {a_share_ts_code_filter("ts_code")}
-                    """,
-                    (fingerprint_end,),
-                )
-                stock_st_events = dict(cur.fetchone() or {})
+                stock_st_events = None
+                if not canonical_snapshots:
+                    cur.execute(
+                        f"""
+                        SELECT
+                            COUNT(*) AS row_count,
+                            MAX(pub_date)::date AS max_pub_date,
+                            MAX(imp_date)::date AS max_imp_date,
+                            MAX(ingested_at) AS max_ingested_at
+                          FROM market.stock_st_events
+                         WHERE pub_date::date <= %s
+                           {a_share_ts_code_filter("ts_code")}
+                        """,
+                        (fingerprint_end,),
+                    )
+                    stock_st_events = dict(cur.fetchone() or {})
                 cur.execute(
                     """
                     SELECT MAX(cal_date)::date AS max_trading_day
@@ -318,77 +331,16 @@ class StockUniversePitService:
                     (fingerprint_end,),
                 )
                 trading_calendar = dict(cur.fetchone() or {})
-                confirmed_delisting = None
-                stock_namechange = None
-                if include_canonical_terminal_events:
-                    cur.execute(
-                        f"""
-                        SELECT COUNT(*) AS row_count,
-                               MAX(start_date)::date AS max_start_date,
-                               MAX(COALESCE(end_date, start_date))::date AS max_end_date,
-                               MAX(updated_at) AS max_updated_at
-                          FROM market.stock_namechange historical_name
-                          JOIN market.stock_basic stock
-                            ON stock.ts_code = historical_name.ts_code
-                           AND stock.exchange IN ('SSE', 'SZSE')
-                         WHERE historical_name.start_date <= %s
-                           AND (
-                               historical_name.ts_code LIKE '%%.SH'
-                               OR historical_name.ts_code LIKE '%%.SZ'
-                           )
-                           {a_share_ts_code_filter("historical_name.ts_code")}
-                        """,
-                        (fingerprint_end,),
-                    )
-                    stock_namechange = dict(cur.fetchone() or {})
-                    cur.execute(
-                        f"""
-                        SELECT COUNT(*) AS row_count,
-                               MAX(COALESCE(
-                                   (available_at AT TIME ZONE 'Asia/Shanghai')::date,
-                                   source_event_date::date
-                               )) AS max_known_date,
-                               MAX(effective_trade_date::date) AS max_effective_date,
-                               MAX(updated_at) AS max_updated_at
-                          FROM market.event_signal
-                         WHERE event_type = 'stock_delisting_confirmed'
-                           AND time_mode = 'backtest'
-                           AND signal_status IN ('ACTIVE', 'RESOLVED', 'EXPIRED')
-                           AND evidence->>'terminal_evidence_contract' = %s
-                           AND evidence#>>'{{issuer_binding,schema_version}}' = 'announcement_issuer_binding_v1'
-                           AND evidence#>>'{{issuer_binding,status}}' = 'EXACT'
-                           AND evidence#>>'{{issuer_binding,actionable}}' = 'true'
-                           AND evidence#>>'{{issuer_binding,resolved_ts_code}}' = ts_code
-                         AND COALESCE(
-                                 evidence#>>'{{terminal_cross_check,matched}}',
-                                 evidence#>>'{{st_cross_check,matched}}'
-                             ) = 'true'
-                         AND COALESCE(
-                                 evidence#>>'{{terminal_cross_check,terminal}}',
-                                 evidence#>>'{{st_cross_check,terminal}}'
-                             ) = 'true'
-                           AND COALESCE(
-                               (available_at AT TIME ZONE 'Asia/Shanghai')::date,
-                               source_event_date::date
-                           ) <= %s
-                           {a_share_ts_code_filter("ts_code")}
-                        """,
-                        (CANONICAL_PIT_TERMINAL_EVIDENCE_CONTRACT, fingerprint_end),
-                    )
-                    confirmed_delisting = dict(cur.fetchone() or {})
-                    confirmed_delisting["terminal_evidence_contract"] = (
-                        CANONICAL_PIT_TERMINAL_EVIDENCE_CONTRACT
-                    )
         fingerprint = {
             "fingerprint_end_date": fingerprint_end.isoformat(),
             "stock_basic": stock_basic,
             "stock_st": stock_st,
-            "stock_st_events": stock_st_events,
             "trading_calendar": trading_calendar,
         }
-        if include_canonical_terminal_events:
-            fingerprint["stock_namechange"] = stock_namechange
-            fingerprint["confirmed_delisting_events"] = confirmed_delisting
+        if canonical_snapshots:
+            fingerprint["st_status_source"] = "market.stock_st"
+        else:
+            fingerprint["stock_st_events"] = stock_st_events
         return fingerprint
 
     def get_status(self, *, universe_key: str = DEFAULT_ST_PIT_UNIVERSE_KEY) -> dict[str, Any]:
@@ -459,7 +411,7 @@ class StockUniversePitService:
         effective_end = self._preserve_existing_end_date(requested_end, state)
         source = self.compute_source_fingerprint(
             end_date=effective_end,
-            include_canonical_terminal_events=True,
+            canonical_snapshots=True,
         )
         source_sha = _fingerprint_sha256(source)
         needs_rebuild, reason = self._needs_rebuild(
@@ -911,7 +863,7 @@ class StockUniversePitService:
             scope=DEFAULT_ST_PIT_SCOPE,
             ipo_filter_days=365,
             ipo_filter_unit="calendar_days",
-            include_canonical_terminal_events=False,
+            canonical_snapshots=False,
         )
 
     def ensure_canonical_pit_universe(
@@ -931,7 +883,7 @@ class StockUniversePitService:
         requested_end = end_date or self.resolve_default_end_date()
         state = self.get_status(universe_key=CANONICAL_PIT_UNIVERSE_KEY)
         end = self._preserve_existing_end_date(requested_end, state)
-        source = self.compute_source_fingerprint(end_date=end, include_canonical_terminal_events=True)
+        source = self.compute_source_fingerprint(end_date=end, canonical_snapshots=True)
         source_sha = _fingerprint_sha256(source)
         needs_rebuild, reason = self._needs_rebuild(
             state=state,
@@ -999,7 +951,7 @@ class StockUniversePitService:
             scope=CANONICAL_PIT_SCOPE,
             ipo_filter_days=CANONICAL_PIT_IPO_TRADING_SESSIONS,
             ipo_filter_unit="trading_sessions",
-            include_canonical_terminal_events=True,
+            canonical_snapshots=True,
         )
 
     def _rebuild_st_pit_universe(
@@ -1019,7 +971,7 @@ class StockUniversePitService:
         scope: str = DEFAULT_ST_PIT_SCOPE,
         ipo_filter_days: int = 365,
         ipo_filter_unit: str = "calendar_days",
-        include_canonical_terminal_events: bool = False,
+        canonical_snapshots: bool = False,
         live_source_end_date: dt.date | None = None,
         dry_run: bool = False,
     ) -> dict[str, Any]:
@@ -1033,7 +985,7 @@ class StockUniversePitService:
             source_fingerprint
             if source_fingerprint is not None and source_matches_effective_end
             else self.compute_source_fingerprint(
-                end_date=end, include_canonical_terminal_events=include_canonical_terminal_events
+                end_date=end, canonical_snapshots=canonical_snapshots
             )
         )
         source_sha = (
@@ -1076,14 +1028,22 @@ class StockUniversePitService:
                 )
             try:
                 locked_state = self.get_status(universe_key=universe_key)
-                if (live_source_end_date is not None and locked_state.get("status") == "ready"
-                        and not locked_state.get("dirty") and locked_state.get("end_date") >= end):
-                    return {"status": "ready", "rebuilt": False, "reason": "built_by_peer", "state": locked_state}
+                if live_source_end_date is not None:
+                    if locked_state.get("status") != "ready" or locked_state.get("dirty"):
+                        return {"status": "waiting", "rebuilt": False, "reason": "published_canonical_not_ready"}
+                    locked_end_date = locked_state["end_date"]
+                    locked_summary = locked_state.get("last_build_summary") or {}
+                    locked_source_through = dt.date.fromisoformat(
+                        locked_summary.get("live_projection", {}).get("source_through", locked_end_date.isoformat())
+                    )
+                    if locked_end_date > end or (locked_end_date == end and locked_source_through >= live_source_end_date):
+                        return {"status": "ready", "rebuilt": False, "reason": "built_by_peer", "state": locked_state}
+                    incremental_from = locked_source_through + dt.timedelta(days=1)
                 locked_end = self._preserve_existing_end_date(end, locked_state)
                 if locked_end != end:
                     end = locked_end
                     source = self.compute_source_fingerprint(
-                        end_date=end, include_canonical_terminal_events=include_canonical_terminal_events
+                        end_date=end, canonical_snapshots=canonical_snapshots
                     )
                     source_sha = _fingerprint_sha256(source)
                 if skip_if_ready:

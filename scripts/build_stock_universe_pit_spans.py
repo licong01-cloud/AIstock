@@ -1,4 +1,4 @@
-"""Build PIT stock-universe spans from local ST/listing events.
+"""Build PIT stock-universe spans from local ST and listing data.
 
 The generated spans are eligibility ranges for new buys / selection. They do
 not delete feature data. Rules are intentionally conservative:
@@ -7,13 +7,14 @@ not delete feature data. Rules are intentionally conservative:
 - A-shares only; B-share boards (200/201xxx.SZ, 900xxx.SH) are permanently
   excluded from every generated universe (BUG-927).
 - IPO eligibility starts after ``list_date + ipo_filter_days``.
-- Negative ST events exclude from the first trading day after ``pub_date``.
-- ST removal/recovery can re-enter from
+- The canonical rolling scope uses dated ST snapshots and stock_basic lifecycle dates.
+- In legacy scopes, negative ST events exclude from the first trading day after ``pub_date``.
+- In legacy scopes, ST removal/recovery can re-enter from
   ``max(next_trading_day(pub_date), first_trading_day_on_or_after(imp_date))``.
 - The default ``st_only_active`` scope does not implement full delisting /
   paused listing PIT. It uses the SH/SZ stock list active as of the requested
   generation end date and applies ST PIT exits/restores.
-- Existing ST status on the universe start date is seeded from
+- Legacy initial ST status on the universe start date is seeded from
   ``market.stock_st`` so stocks already under ST before the event backfill
   window are not allowed until a later recovery event.
 """
@@ -25,7 +26,7 @@ import datetime as dt
 import json
 import os
 from collections import Counter, defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -37,7 +38,6 @@ from backend.services.canonical_equity_pit import (
     CANONICAL_PIT_IPO_TRADING_SESSIONS,
     CANONICAL_PIT_RULE_VERSION,
     CANONICAL_PIT_SCOPE,
-    CANONICAL_PIT_TERMINAL_EVIDENCE_CONTRACT,
     CANONICAL_PIT_UNIVERSE_KEY,
     canonical_rule_parameters_digest,
 )
@@ -430,42 +430,6 @@ def is_authoritative_st_name(value: str | None) -> bool:
     return name.startswith(("ST", "*ST", "SST", "S*ST", "PT"))
 
 
-def _load_namechange_st_codes_by_date(
-    conn: Any,
-    dates: Iterable[dt.date],
-) -> dict[dt.date, set[str]]:
-    anchor_dates = sorted(set(dates))
-    output = {date: set() for date in anchor_dates}
-    if not anchor_dates:
-        return output
-    with conn.cursor() as cur:
-        cur.execute(
-            f"""
-            SELECT anchor.anchor_date, historical_name.ts_code, historical_name.name
-              FROM unnest(%s::date[]) AS anchor(anchor_date)
-              JOIN market.stock_namechange historical_name
-                ON historical_name.start_date <= anchor.anchor_date
-               AND (
-                    historical_name.end_date IS NULL
-                    OR historical_name.end_date >= anchor.anchor_date
-               )
-              JOIN market.stock_basic stock
-                ON stock.ts_code = historical_name.ts_code
-               AND stock.exchange IN ('SSE', 'SZSE')
-               AND (stock.list_date IS NULL OR stock.list_date <= anchor.anchor_date)
-               AND (stock.delist_date IS NULL OR stock.delist_date >= anchor.anchor_date)
-             WHERE (historical_name.ts_code LIKE '%%.SH' OR historical_name.ts_code LIKE '%%.SZ')
-               {a_share_ts_code_filter("historical_name.ts_code")}
-             ORDER BY anchor.anchor_date, historical_name.ts_code, historical_name.start_date
-            """,
-            (anchor_dates,),
-        )
-        for anchor_date, ts_code, name in cur.fetchall():
-            if is_authoritative_st_name(name) and not is_b_share_ts_code(str(ts_code)):
-                output[anchor_date].add(str(ts_code))
-    return output
-
-
 def audit_st_snapshot_continuity(
     snapshots: Mapping[dt.date, Iterable[str]],
     *,
@@ -793,85 +757,6 @@ def _stock_basic_terminal_events(
     return events
 
 
-def _load_confirmed_delisting_events(conn: Any, calendar: TradingCalendar, end_date: dt.date) -> list[EventRow]:
-    """Load announcement-as-of confirmed terminal events from the shared ledger."""
-
-    with conn.cursor(cursor_factory=pgx.RealDictCursor) as cur:
-        cur.execute(
-            f"""
-            SELECT ts_code, source_event_date::date, available_at, effective_trade_date::date,
-                   COALESCE((available_at AT TIME ZONE 'Asia/Shanghai')::date, source_event_date::date)
-                       AS known_date,
-                   source_type, source_pk, reason, evidence
-             FROM market.event_signal
-             WHERE event_type = 'stock_delisting_confirmed'
-               AND time_mode = 'backtest'
-               AND signal_status IN ('ACTIVE', 'RESOLVED', 'EXPIRED')
-               AND evidence->>'terminal_evidence_contract' = %s
-               AND evidence#>>'{{issuer_binding,schema_version}}' = 'announcement_issuer_binding_v1'
-               AND evidence#>>'{{issuer_binding,status}}' = 'EXACT'
-               AND evidence#>>'{{issuer_binding,actionable}}' = 'true'
-               AND evidence#>>'{{issuer_binding,resolved_ts_code}}' = ts_code
-               AND COALESCE(
-                       evidence#>>'{{terminal_cross_check,matched}}',
-                       evidence#>>'{{st_cross_check,matched}}'
-                   ) = 'true'
-               AND COALESCE(
-                       evidence#>>'{{terminal_cross_check,terminal}}',
-                       evidence#>>'{{st_cross_check,terminal}}'
-                   ) = 'true'
-               AND COALESCE((available_at AT TIME ZONE 'Asia/Shanghai')::date, source_event_date::date) <= %s
-               {a_share_ts_code_filter("ts_code")}
-             ORDER BY ts_code, effective_trade_date, available_at, signal_id
-            """,
-            (CANONICAL_PIT_TERMINAL_EVIDENCE_CONTRACT, end_date),
-        )
-        output: list[EventRow] = []
-        for row in cur.fetchall():
-            effective = row.get("effective_trade_date")
-            available_at = row.get("available_at")
-            known_date = row.get("known_date")
-            if known_date is None:
-                raise CanonicalPitEvidenceError(
-                    "confirmed delisting event has no observable knowledge date",
-                    context={"ts_code": str(row["ts_code"]), "source_pk": row.get("source_pk")},
-                )
-            if effective is None or effective < known_date:
-                raise CanonicalPitEvidenceError(
-                    "confirmed delisting effective_trade_date violates point-in-time ordering",
-                    context={
-                        "ts_code": str(row["ts_code"]),
-                        "known_date": known_date.isoformat(),
-                        "effective_trade_date": effective.isoformat() if effective else None,
-                    },
-                )
-            # event_signal.effective_trade_date is the shared, leakage-safe
-            # authority. It already accounts for exact publish time and the
-            # pre-open cutoff; recomputing it here would drift from that rule.
-            action_date = calendar.on_or_after(effective)
-            if action_date is None:
-                continue
-            output.append(
-                EventRow(
-                    ts_code=str(row["ts_code"]),
-                    event_kind="delisting_confirmed",
-                    action_date=action_date,
-                    source="market.event_signal",
-                    source_pub_date=row.get("source_event_date"),
-                    source_effective_date=effective,
-                    terminal=True,
-                    metadata={
-                        "source_type": row.get("source_type"),
-                        "source_pk": row.get("source_pk"),
-                        "available_at": available_at.isoformat() if available_at else None,
-                        "reason": row.get("reason"),
-                        "evidence": row.get("evidence") or {},
-                    },
-                )
-            )
-    return output
-
-
 def audit_canonical_stock_lifecycle(stocks: Iterable[StockRow]) -> dict[str, Any]:
     """Fail closed when stock_basic cannot support a historical PIT lifecycle."""
 
@@ -914,181 +799,6 @@ def audit_canonical_stock_lifecycle(stocks: Iterable[StockRow]) -> dict[str, Any
             context=ledger,
         )
     return ledger
-
-
-def audit_canonical_terminal_evidence(
-    stocks: Iterable[StockRow],
-    *,
-    announcement_events: Iterable[EventRow],
-    start_date: dt.date | None = None,
-    end_date: dt.date | None = None,
-) -> dict[str, Any]:
-    """Check usable terminal dates; announcement-event records are optional.
-
-    Authoritative stock_basic status/date facts already drive terminal spans.
-    Do not require a second announcement ledger for the same lifecycle fact.
-    Preserve the receipt keys for older readers, not the old evidence gate.
-    """
-
-    rows = list(stocks)
-    terminal_codes = {
-        event.ts_code
-        for event in announcement_events
-        if event.terminal
-        and event.source != "market.stock_basic"
-        and (end_date is None or event.action_date <= end_date)
-    }
-    pre_window = sorted(
-        stock.ts_code
-        for stock in rows
-        if str(stock.list_status or "").upper() == "D"
-        and start_date is not None
-        and stock.delist_date is not None
-        and stock.delist_date < start_date
-    )
-    required = sorted(
-        stock.ts_code
-        for stock in rows
-        if str(stock.list_status or "").upper() == "P"
-        or (
-            str(stock.list_status or "").upper() == "D"
-            and (start_date is None or (stock.delist_date is not None and stock.delist_date >= start_date))
-            and (end_date is None or (stock.delist_date is not None and stock.delist_date <= end_date))
-        )
-    )
-    dated_codes = {
-        stock.ts_code
-        for stock in rows
-        if str(stock.list_status or "").upper() in {"D", "P"}
-        and stock.list_date is not None
-        and stock.delist_date is not None
-        and stock.delist_date >= stock.list_date
-    }
-    missing = sorted(set(required).difference(dated_codes, terminal_codes))
-    receipt = {
-        "required_terminal_security_count": len(required),
-        "pre_window_terminal_security_count": len(pre_window),
-        "pre_window_terminal_security_codes": pre_window,
-        "announcement_terminal_evidence_count": len(set(required).intersection(terminal_codes)),
-        "stock_basic_terminal_date_count": len(set(required).intersection(dated_codes)),
-        "missing_terminal_evidence_count": len(missing),
-        "missing_terminal_evidence_codes": missing,
-        "status": "ready" if not missing else "blocked",
-    }
-    if missing:
-        raise CanonicalPitEvidenceError(
-            "canonical terminal effective date is unavailable: "
-            f"missing_count={len(missing)} missing_codes={missing}",
-            context=receipt,
-        )
-    return receipt
-
-
-def _audit_canonical_st_snapshots(
-    conn: Any,
-    *,
-    calendar: TradingCalendar,
-    start_date: dt.date,
-    end_date: dt.date,
-    events: Iterable[EventRow],
-) -> dict[str, Any]:
-    days = tuple(day for day in calendar.days if start_date <= day <= end_date)
-    with conn.cursor() as cur:
-        cur.execute(
-            f"""
-            SELECT DISTINCT ann_date::date
-              FROM market.stock_st
-             WHERE ann_date::date BETWEEN %s AND %s
-               {a_share_ts_code_filter("ts_code")}
-             ORDER BY ann_date
-            """,
-            (start_date, end_date),
-        )
-        observed = {row[0] for row in cur.fetchall()}
-    if not days:
-        raise RuntimeError("canonical ST snapshot audit requires trading days")
-    if days[0] not in observed or days[-1] not in observed:
-        raise CanonicalPitEvidenceError(
-            "ST snapshot boundary is missing and cannot be reconstructed without two observed anchors: "
-            f"start_present={days[0] in observed} end_present={days[-1] in observed}",
-            context={
-                "start": days[0].isoformat(),
-                "end": days[-1].isoformat(),
-                "start_present": days[0] in observed,
-                "end_present": days[-1] in observed,
-            },
-        )
-
-    missing_indexes = [index for index, day in enumerate(days) if day not in observed]
-    grouped_indexes: list[list[int]] = []
-    for index in missing_indexes:
-        if not grouped_indexes or index != grouped_indexes[-1][-1] + 1:
-            grouped_indexes.append([index])
-        else:
-            grouped_indexes[-1].append(index)
-    relevant_events = sorted(
-        (
-            event
-            for event in events
-            # stock_st snapshots describe risk-name membership. A terminal
-            # universe exit is independent: delisting-period securities can
-            # legitimately remain in stock_st until their final trading day.
-            if event.event_kind in {"st_negative", "st_restore"}
-        ),
-        key=lambda event: (event.action_date, event.ts_code, event.event_kind),
-    )
-    anchor_dates = [
-        day
-        for indexes in grouped_indexes
-        for day in (days[indexes[0] - 1], days[indexes[-1] + 1])
-    ]
-    authoritative_st_names = _load_namechange_st_codes_by_date(conn, anchor_dates)
-    namechange_anchor_additions: set[tuple[dt.date, str]] = set()
-    for indexes in grouped_indexes:
-        previous_day = days[indexes[0] - 1]
-        next_day = days[indexes[-1] + 1]
-        snapshots: dict[dt.date, set[str]] = {previous_day: set(), next_day: set()}
-        with conn.cursor() as cur:
-            cur.execute(
-                f"""
-                SELECT ann_date::date, ts_code
-                  FROM market.stock_st
-                 WHERE ann_date::date = ANY(%s)
-                   {a_share_ts_code_filter("ts_code")}
-                 ORDER BY ann_date, ts_code
-                """,
-                ([previous_day, next_day],),
-            )
-            for snapshot_date, ts_code in cur.fetchall():
-                snapshots[snapshot_date].add(str(ts_code))
-        for snapshot_date in (previous_day, next_day):
-            for ts_code in authoritative_st_names.get(snapshot_date, set()):
-                if ts_code not in snapshots[snapshot_date]:
-                    snapshots[snapshot_date].add(ts_code)
-                    namechange_anchor_additions.add((snapshot_date, ts_code))
-        gap_events = [
-            (event.ts_code, event.event_kind)
-            for event in relevant_events
-            if previous_day < event.action_date <= next_day
-        ]
-        reconstruct_missing_st_snapshot(
-            snapshots[previous_day],
-            snapshots[next_day],
-            gap_events,
-        )
-    missing_days = [days[index] for index in missing_indexes]
-    return {
-        "trading_day_count": len(days),
-        "observed_snapshot_day_count": len(observed.intersection(days)),
-        "missing_snapshot_day_count": len(missing_days),
-        "reconstructed_snapshot_day_count": len(missing_days),
-        "namechange_anchor_addition_count": len(namechange_anchor_additions),
-        "namechange_anchor_addition_codes": sorted(
-            {ts_code for _date, ts_code in namechange_anchor_additions}
-        ),
-        "missing_snapshot_dates": [day.isoformat() for day in missing_days],
-        "status": "ready",
-    }
 
 
 def _load_stock_basic_scope_counts(conn: Any, *, active_as_of: dt.date | None = None) -> dict[str, int]:
@@ -1491,28 +1201,36 @@ def _write_incremental_extension(
     spans: list[SpanRow],
     events: list[EventRow],
     incremental_from: dt.date,
+    replace_from: dt.date | None = None,
 ) -> dict[str, int]:
-    """Extend an existing PIT universe without deleting historical coverage."""
+    """Extend an existing PIT universe, replacing only spans touching the roll boundary."""
     previous_end = incremental_from - dt.timedelta(days=1)
     delta_spans = [
         span
         for span in spans
         if span.eligible_end >= incremental_from
         or (span.exit_event_date is not None and span.exit_event_date >= incremental_from)
+        or (replace_from is not None and span.eligible_end >= replace_from)
     ]
     delta_events = [event for event in events if event.action_date >= incremental_from]
     with conn.cursor() as cur:
-        cur.execute(
-            """
-            DELETE FROM market.stock_universe_pit_spans
-             WHERE universe_key = %s
-               AND (
-                    eligible_start >= %s
-                    OR (exit_reason = 'generation_end' AND eligible_end = %s)
-               )
-            """,
-            (universe_key, incremental_from, previous_end),
-        )
+        if replace_from is not None:
+            cur.execute(
+                "DELETE FROM market.stock_universe_pit_spans WHERE universe_key=%s AND eligible_end >= %s",
+                (universe_key, replace_from),
+            )
+        else:
+            cur.execute(
+                """
+                DELETE FROM market.stock_universe_pit_spans
+                 WHERE universe_key = %s
+                   AND (
+                        eligible_start >= %s
+                        OR (exit_reason = 'generation_end' AND eligible_end = %s)
+                   )
+                """,
+                (universe_key, incremental_from, previous_end),
+            )
         deleted_spans = cur.rowcount
         cur.execute(
             """
@@ -1547,12 +1265,116 @@ def _write_all_txt(path: Path, spans: Iterable[SpanRow]) -> None:
     path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
 
 
+def _canonical_snapshot_events(
+    conn: Any, *, calendar: TradingCalendar, start_date: dt.date, source_end: dt.date, live: bool,
+) -> tuple[list[EventRow], dict[str, Any]]:
+    days = tuple(day for day in calendar.days if start_date <= day <= source_end)
+    snapshots: dict[dt.date, set[str]] = defaultdict(set)
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT ann_date::date, ts_code FROM market.stock_st
+             WHERE ann_date BETWEEN %s AND %s
+               {a_share_ts_code_filter("ts_code")}
+            """,
+            (start_date, source_end),
+        )
+        for day, code in cur.fetchall():
+            snapshots[day].add(str(code).strip())
+        cur.execute(
+            """
+            SELECT trade_date FROM market.dataset_date_refresh_audit
+             WHERE dataset='stock_st' AND data_source='canonical_db'
+               AND status='success' AND quality_status='empty_valid'
+               AND trade_date BETWEEN %s AND %s
+            """,
+            (start_date, source_end),
+        )
+        for (day,) in cur.fetchall():
+            snapshots.setdefault(day, set())
+
+    missing = [day.isoformat() for day in days if day not in snapshots]
+    if not days or days[0] not in snapshots or days[-1] not in snapshots or (live and missing):
+        raise CanonicalPitEvidenceError(
+            "canonical PIT requires dated ST status snapshots for the rolling window",
+            context={"missing_snapshot_dates": missing},
+        )
+
+    events: list[EventRow] = []
+    previous: set[str] = set()
+    for day in days:
+        # Interior gaps in archived history retain the last known status.
+        # Missing data cannot introduce a removal or look ahead to a future row.
+        if day not in snapshots:
+            continue
+        current = snapshots[day]
+        for kind, codes in (("st_negative", current - previous), ("st_restore", previous - current)):
+            events.extend(
+                EventRow(code, kind, day, "market.stock_st", source_effective_date=day)
+                for code in sorted(codes)
+            )
+        previous = current
+    return events, {
+        "status": "ready",
+        "source": "market.stock_st",
+        "trading_day_count": len(days),
+        "observed_snapshot_day_count": len(days) - len(missing),
+        "missing_snapshot_day_count": len(missing),
+        "carried_forward_snapshot_dates": missing,
+    }
+
+
+def _join_published_prefix(
+    stored_spans: Iterable[SpanRow], tail: list[SpanRow], events: list[EventRow], *,
+    calendar: TradingCalendar, start: dt.date,
+) -> list[SpanRow]:
+    boundary = calendar.before(start)
+    if boundary is None:
+        raise ValueError("published PIT prefix trading boundary is missing")
+    opening = {span.ts_code: span for span in tail if span.eligible_start == start}
+    exit_events = {
+        event.ts_code: event for event in events
+        if event.action_date == start and event.event_kind == "st_negative"
+    }
+    exit_events.update(
+        (event.ts_code, event) for event in events if event.action_date == start and event.terminal
+    )
+    preserved: list[SpanRow] = []
+    for span in stored_spans:
+        if span.eligible_start > boundary:
+            continue
+        if span.eligible_end < boundary:
+            preserved.append(span)
+            continue
+        extension = opening.pop(span.ts_code, None)
+        if extension is not None:
+            preserved.append(replace(
+                extension,
+                eligible_start=span.eligible_start,
+                entry_reason=span.entry_reason,
+                entry_event_date=span.entry_event_date,
+            ))
+        elif span.eligible_end == boundary and span.ts_code not in exit_events and (
+            span.exit_event_date is None or span.exit_event_date < start
+        ):
+            preserved.append(span)
+        else:
+            event = exit_events.get(span.ts_code)
+            preserved.append(replace(
+                span, eligible_end=boundary,
+                exit_reason=event.event_kind if event else "generation_end",
+                exit_event_date=event.action_date if event else None,
+                terminal_exit=event.terminal if event else False,
+            ))
+    return preserved + [span for span in tail if span.eligible_start != start] + list(opening.values())
+
+
 def _live_source_boundary(calendar: TradingCalendar, end_date: dt.date, raw: str | None) -> dt.date:
     if raw is None:
         return end_date
     source_end = _parse_date(raw)
-    if source_end != calendar.before(end_date):
-        raise ValueError("live PIT source boundary must be the previous trading day")
+    if source_end not in {end_date, calendar.before(end_date)}:
+        raise ValueError("live PIT source boundary must be the coverage day or its previous trading day")
     return source_end
 
 
@@ -1632,70 +1454,63 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
         source_end = _live_source_boundary(calendar, end_date, getattr(args, "live_source_end_date", None))
         if source_end != end_date and not canonical_scope:
             raise ValueError("live source projection is only supported for canonical PIT")
-        initial_st_events = _load_initial_st_events(
-            conn,
-            calendar,
-            start_date,
-            active_only=st_only_active,
-            active_as_of=end_date,
-        )
-        st_events = _load_st_events(conn, calendar, source_end, terminal_as_negative=st_only_active)
-        terminal_events = (
-            []
-            if st_only_active
-            else _stock_basic_terminal_events(
-                stocks,
-                calendar,
-                allow_paused_list_date_fallback=not canonical_scope,
-            )
-        )
-        confirmed_delisting_events = _load_confirmed_delisting_events(conn, calendar, source_end) if canonical_scope else []
-        terminal_evidence = (
-            audit_canonical_terminal_evidence(
-                stocks,
-                announcement_events=st_events + confirmed_delisting_events,
-                start_date=start_date,
-                end_date=end_date,
-            )
-            if canonical_scope
-            else None
-        )
-        events = sorted(
-            initial_st_events + st_events + terminal_events + confirmed_delisting_events,
-            key=lambda e: (e.ts_code, e.action_date, e.event_kind),
-        )
+        live = getattr(args, "live_source_end_date", None) is not None
         previous_state = getattr(args, "previous_published_state", None)
-        snapshot_audit_start = start_date
-        if source_end != end_date and previous_state:
-            # Historical continuity has already been published and validated.
-            # Re-audit only the tail between that watermark and completed D-1.
-            snapshot_audit_start = min(source_end, _parse_date(str(previous_state["end_date"])))
-        st_snapshot_continuity = (
-            _audit_canonical_st_snapshots(
-                conn,
-                calendar=calendar,
-                start_date=snapshot_audit_start,
-                end_date=source_end,
-                events=st_events + terminal_events + confirmed_delisting_events,
+        span_start = start_date
+        stored_spans: list[SpanRow] = []
+        if canonical_scope:
+            if live:
+                if write_mode != "incremental" or not previous_state:
+                    raise ValueError("live PIT roll requires an existing canonical materialization")
+                span_start = calendar.on_or_after(incremental_from)
+                if span_start is None or span_start > end_date:
+                    raise ValueError("live PIT snapshot window is outside the requested coverage")
+                with conn.cursor(cursor_factory=pgx.RealDictCursor) as cur:
+                    cur.execute("""
+                        SELECT universe_key, ts_code, eligible_start, eligible_end, entry_reason,
+                               exit_reason, base_list_date, ipo_eligible_date, entry_event_date,
+                               exit_event_date, terminal_exit, metadata
+                          FROM market.stock_universe_pit_spans WHERE universe_key=%s
+                    """, (args.universe_key,))
+                    stored_spans = [SpanRow(**row) for row in cur.fetchall()]
+            # Include the last observed day of the published prefix so the
+            # first recomputed day has an observed baseline for its transitions.
+            snapshot_start = calendar.before(span_start) if live else span_start
+            if snapshot_start is None:
+                raise ValueError("published PIT prefix trading boundary is missing")
+            events, st_snapshot_continuity = _canonical_snapshot_events(
+                conn, calendar=calendar, start_date=snapshot_start, source_end=source_end, live=live,
             )
-            if canonical_scope
-            else None
-        )
+            events += _stock_basic_terminal_events(stocks, calendar, allow_paused_list_date_fallback=False)
+        else:
+            if live:
+                raise ValueError("live source projection is only supported for canonical PIT")
+            events = _load_initial_st_events(
+                conn, calendar, start_date, active_only=st_only_active, active_as_of=end_date,
+            )
+            events += _load_st_events(conn, calendar, source_end, terminal_as_negative=st_only_active)
+            if not st_only_active:
+                events += _stock_basic_terminal_events(stocks, calendar)
+            st_snapshot_continuity = None
+
+        events.sort(key=lambda event: (event.ts_code, event.action_date, event.event_kind))
         spans = _build_spans(
             stocks,
             events,
             universe_key=args.universe_key,
-            start_date=start_date,
+            start_date=span_start,
             end_date=end_date,
             ipo_filter_days=args.ipo_filter_days,
             ipo_filter_unit=ipo_filter_unit,
             calendar=calendar,
         )
         validation = _validate(spans, events)
-        st_span_exclusion = _audit_st_span_exclusion(
-            conn, spans=spans, events=events, calendar=calendar,
-            start_date=start_date, end_date=source_end,
-        )
+        if live:
+            spans = _join_published_prefix(stored_spans, spans, events, calendar=calendar, start=span_start)
+        if not canonical_scope:
+            st_span_exclusion = _audit_st_span_exclusion(
+                conn, spans=spans, events=events, calendar=calendar, start_date=start_date, end_date=source_end,
+            )
         event_counts = Counter(event.event_kind for event in events)
         span_counts = Counter(span.exit_reason for span in spans)
         spans_by_code: dict[str, list[SpanRow]] = defaultdict(list)
@@ -1729,14 +1544,12 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
             "exception_ledger_status": exception_ledger["status"] if exception_ledger else None,
             "exception_ledger": exception_ledger,
             "st_snapshot_continuity": st_snapshot_continuity,
-            "st_span_exclusion": st_span_exclusion,
-            "terminal_evidence": terminal_evidence,
             "delist_pit": not st_only_active,
             "pause_pit": not st_only_active,
             "survivorship_bias": (
                 "D/P stocks as of generation end are excluded by ST-only active universe scope; delisting PIT is not implemented"
                 if st_only_active
-                else "canonical historical lifecycle and announcement-as-of terminal events enabled"
+                else "canonical ST snapshots and dated stock_basic lifecycle boundaries"
                 if canonical_scope
                 else "legacy delist/pause PIT terminal events enabled"
             ),
@@ -1756,11 +1569,14 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
             "validation": validation,
             "samples": {"multi_span_instruments": sample_multi_span},
         }
+        if canonical_scope:
+            summary["st_status_source"] = "market.stock_st"
+        else:
+            summary["st_span_exclusion"] = st_span_exclusion
         if source_end != end_date:
-            st_snapshot_continuity["historical_audit_reused_through"] = snapshot_audit_start.isoformat()
             summary["live_projection"] = {
                 "source_through": source_end.isoformat(), "coverage_through": end_date.isoformat(),
-                "contract": "previous_completed_trade_day_facts_existing_causal_rules_v1",
+                "contract": "latest_completed_st_status_snapshot_v1",
                 "synthetic_snapshot_written": False,
             }
         if any(int(validation.get(key, 0) or 0) for key in (
@@ -1769,18 +1585,26 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
             raise RuntimeError(f"PIT validation failed before publication: {validation}")
         if previous_state and previous_state.get("status") == "ready" and not previous_state.get("dirty"):
             previous_end = _parse_date(str(previous_state["end_date"]))
-            with conn.cursor() as cur:
-                cur.execute("SELECT ts_code, eligible_start, eligible_end FROM market.stock_universe_pit_spans "
-                            "WHERE universe_key=%s ORDER BY ts_code, eligible_start, eligible_end", (args.universe_key,))
-                prefix_unchanged = _membership_prefix_matches(cur.fetchall(), spans, previous_end)
-            if getattr(args, "live_source_end_date", None) and not prefix_unchanged:
-                raise RuntimeError("live PIT roll would change published historical membership; source repair required")
-            if prefix_unchanged and start_date == _parse_date(str(previous_state["start_date"])):
-                ancestors = list((previous_state.get("last_build_summary") or {}).get("rolling_predecessors", []))
-                predecessor = {"source_digest": previous_state["source_fingerprint_sha256"],
-                               "coverage_start": start_date.isoformat(), "coverage_end": previous_end.isoformat()}
-                if predecessor not in ancestors:
-                    ancestors.append(predecessor)
+            if live:
+                prior_spans = [(span.ts_code, span.eligible_start, span.eligible_end) for span in stored_spans]
+            else:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT ts_code, eligible_start, eligible_end FROM market.stock_universe_pit_spans "
+                                "WHERE universe_key=%s", (args.universe_key,))
+                    prior_spans = cur.fetchall()
+            previous_start = _parse_date(str(previous_state["start_date"]))
+            if start_date == previous_start:
+                ancestors = [
+                    predecessor for predecessor in
+                    (previous_state.get("last_build_summary") or {}).get("rolling_predecessors", [])
+                    if (live and _parse_date(predecessor["coverage_end"]) <= snapshot_start)
+                    or _membership_prefix_matches(prior_spans, spans, _parse_date(predecessor["coverage_end"]))
+                ]
+                if _membership_prefix_matches(prior_spans, spans, previous_end):
+                    predecessor = {"source_digest": previous_state["source_fingerprint_sha256"],
+                                   "coverage_start": start_date.isoformat(), "coverage_end": previous_end.isoformat()}
+                    if predecessor not in ancestors:
+                        ancestors.append(predecessor)
                 summary["rolling_predecessors"] = ancestors
         if not args.dry_run:
             from backend.services.sector_data_repair import capture_sector_pit_spans, mark_pit_revision
@@ -1794,6 +1618,7 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
                     spans=spans,
                     events=events,
                     incremental_from=incremental_from,
+                    replace_from=calendar.before(span_start) if live else None,
                 )
             else:
                 _write_results(

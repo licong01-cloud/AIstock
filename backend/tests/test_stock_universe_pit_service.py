@@ -21,66 +21,87 @@ from backend.services.stock_universe_pit_service import (
 )
 from backend.services.canonical_equity_pit import (
     CANONICAL_PIT_AUTHORITY_ID,
-    CANONICAL_PIT_TERMINAL_EVIDENCE_CONTRACT,
     PitAuthorityStatus,
     PitConsumerBinding,
     canonical_rule_parameters_digest,
 )
 
 
-def test_canonical_source_fingerprint_uses_builder_terminal_evidence_contract() -> None:
-    source = inspect.getsource(StockUniversePitService.compute_source_fingerprint)
+def test_canonical_fingerprint_does_not_read_announcement_tables(monkeypatch) -> None:
+    class Connection:
+        def __enter__(self): return self
+        def __exit__(self, *_args): return False
+        def cursor(self, **_kwargs): return self
+        def execute(self, sql, _params):
+            assert "stock_st_events" not in sql
+            assert "event_signal" not in sql
+            assert "stock_namechange" not in sql
+        def fetchone(self): return {}
 
-    assert "CANONICAL_PIT_TERMINAL_EVIDENCE_CONTRACT" in source
-    assert "evidence->>'terminal_evidence_contract' = %s" in source
-    assert "evidence#>>'{{issuer_binding,schema_version}}' = 'announcement_issuer_binding_v1'" in source
-    assert "evidence#>>'{{issuer_binding,status}}' = 'EXACT'" in source
-    assert "evidence#>>'{{issuer_binding,actionable}}' = 'true'" in source
-    assert "evidence#>>'{{issuer_binding,resolved_ts_code}}' = ts_code" in source
-    assert "evidence#>>'{{terminal_cross_check,matched}}'" in source
-    assert "evidence#>>'{{terminal_cross_check,terminal}}'" in source
-    assert "evidence#>>'{{st_cross_check,matched}}'" in source
-    assert "evidence#>>'{{st_cross_check,terminal}}'" in source
-    assert "COALESCE" in source
-    assert "FROM market.stock_namechange" in source
-    assert 'fingerprint["stock_namechange"]' in source
-    assert CANONICAL_PIT_TERMINAL_EVIDENCE_CONTRACT == "issuer_bound_stock_delisting_v2"
+    monkeypatch.setattr("backend.services.stock_universe_pit_service.get_conn", Connection)
+    service = StockUniversePitService(existing_schema_only=True)
+    result = service.compute_source_fingerprint(end_date=dt.date(2026, 11, 25), canonical_snapshots=True)
+    assert result["st_status_source"] == "market.stock_st"
+    assert "stock_st_events" not in result
 
 
 QE_SNAPSHOT_KEY = "shsz_st_pit_qe_dataset_test_20180801_20260630_v1"
 
 
-@pytest.mark.parametrize("source_ready", [False, True])
-def test_live_roll_requires_completed_prior_day_sources_and_uses_incremental_write(monkeypatch, source_ready) -> None:
+@pytest.mark.parametrize(
+    ("published_end", "source_days", "source_end", "incremental_from"),
+    [
+        (24, set(), None, None),
+        (24, {25}, 25, 24),
+        (26, {25}, None, None),
+        (26, {25, 26}, 26, 26),
+    ],
+)
+def test_canonical_roll_only_requires_stock_st_and_finalizes_projection(
+    monkeypatch, published_end, source_days, source_end, incremental_from,
+) -> None:
+    from backend.services.trading_core.errors import DataUnavailableError
+
+    def day(number):
+        return dt.date(2026, 11, number)
+
     service = StockUniversePitService(existing_schema_only=True)
-    state = {"status": "ready", "dirty": False, "start_date": dt.date(2018, 8, 1), "end_date": dt.date(2026, 10, 16)}
+    projected_from = 23 if published_end == 24 else 25
+    state = {
+        "status": "ready", "dirty": False, "start_date": dt.date(2018, 8, 1), "end_date": day(published_end),
+        "last_build_summary": {"live_projection": {"source_through": day(projected_from).isoformat()}},
+    }
     monkeypatch.setattr(service, "get_status_readonly", lambda **_kwargs: state)
-    calls = []
+
     class Connection:
         def __enter__(self): return self
         def __exit__(self, *_args): return False
         def cursor(self): return self
         def execute(self, *_args): pass
-        def fetchone(self): return (dt.date(2026, 10, 16),)
+        def fetchone(self): return (day(25),)
+
     class Audit:
-        def require_success(self, **kwargs):
-            calls.append(kwargs)
-            if not source_ready:
-                raise RuntimeError("source waiting")
+        def require_success(self, *, dataset, trade_date, data_source):
+            assert dataset == "stock_st" and data_source == "canonical_db"
+            if trade_date.day not in source_days:
+                raise DataUnavailableError("source waiting")
+
     monkeypatch.setattr("backend.services.stock_universe_pit_service.get_conn", Connection)
     monkeypatch.setattr("backend.services.data_refresh_audit.DataRefreshAuditRepository", Audit)
     monkeypatch.setattr(service, "compute_source_fingerprint", lambda **_kwargs: {"facts": 1})
     monkeypatch.setattr(service, "_rebuild_st_pit_universe", lambda **kwargs: kwargs)
-    if not source_ready:
-        with pytest.raises(RuntimeError, match="source waiting"):
-            service.advance_canonical_trade_day(trade_date=dt.date(2026, 10, 19))
+    if not source_days:
+        with pytest.raises(DataUnavailableError, match="source waiting"):
+            service.advance_canonical_trade_day(trade_date=day(26))
+        return
+    result = service.advance_canonical_trade_day(trade_date=day(26))
+    if source_end is None:
+        assert result["reason"] == "projected_from_last_snapshot"
     else:
-        result = service.advance_canonical_trade_day(trade_date=dt.date(2026, 10, 19))
-        assert result["live_source_end_date"] == dt.date(2026, 10, 16)
-        assert result["incremental_from"] == dt.date(2026, 10, 17)
+        assert result["live_source_end_date"] == day(source_end)
+        assert result["incremental_from"] == day(incremental_from)
         assert result["write_mode"] == "incremental"
-        assert {row["dataset"] for row in calls} == {"stock_st", "stock_st_events"}
-    assert all(row["trade_date"] == dt.date(2026, 10, 16) for row in calls)
+        assert result["canonical_snapshots"] is True
 
 
 def test_resolver_checks_exact_published_rolling_predecessor() -> None:
@@ -916,7 +937,7 @@ def test_canonical_ensure_uses_exact_v2_scope_and_source_policy(monkeypatch) -> 
     monkeypatch.setattr(service, "get_status", lambda **_kwargs: {"status": "missing", "dirty": True})
 
     def fingerprint(**kwargs):
-        assert kwargs["include_canonical_terminal_events"] is True
+        assert kwargs["canonical_snapshots"] is True
         return source
 
     monkeypatch.setattr(service, "compute_source_fingerprint", fingerprint)
@@ -1094,4 +1115,4 @@ def test_canonical_rebuild_passes_exact_builder_contract(monkeypatch) -> None:
     assert captured["scope"] == CANONICAL_PIT_SCOPE
     assert captured["ipo_filter_days"] == 252
     assert captured["ipo_filter_unit"] == "trading_sessions"
-    assert captured["include_canonical_terminal_events"] is True
+    assert captured["canonical_snapshots"] is True
