@@ -30,16 +30,26 @@
   "evidence_uris": [],
   "expected": "每日ST状态及股票基础生命周期可用即更新全局PIT，缺失或迟到的公告不影响。覆盖延伸或修正必须正确维护已发布PIT身份及下游兼容性。",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
-      "scripts/build_stock_universe_pit_spans.py",
+    "actual_changed_files": [
       "backend/services/stock_universe_pit_service.py",
       "backend/services/tushare_sync_engine.py",
-      "backend/tests/test_stock_universe_pit_spans.py",
       "backend/tests/test_stock_universe_pit_service.py",
-      "backend/tests/test_tushare_sync_engine.py"
+      "backend/tests/test_stock_universe_pit_spans.py",
+      "backend/tests/test_tushare_sync_engine.py",
+      "scripts/build_stock_universe_pit_spans.py",
+      "tests/aistock_validation/bugs/20261125_BUG-2288-pit-st.json"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "backend/services/stock_universe_pit_service.py",
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/test_stock_universe_pit_service.py",
+      "backend/tests/test_stock_universe_pit_spans.py",
+      "backend/tests/test_tushare_sync_engine.py",
+      "scripts/build_stock_universe_pit_spans.py",
+      "tests/aistock_validation/bugs/20261125_BUG-2288-pit-st.json"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "scripts/build_stock_universe_pit_spans.py",
@@ -183,14 +193,20 @@
     "business_smoke_contract_id": "local_data_freshness",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
     "database_readback_ref": "http://127.0.0.1:8001/api/v1/local-data/integrity/days/2026-11-25",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "Fresh isolated Python process from BUG-2288 commit 19bd62e1c imported the tracked stock_universe_pit_service and span builder. DEV aistock_dev rollback transaction verified atomic PIT span/state writes, ST exclusion from snapshot, restoration on same-day validated snapshot, and idempotent repeat. Separate read-only production shadow replay excluded 000892.SZ from 2026-11-24 and projected through 2026-11-26 without ST announcements."
+    ],
     "health_ref": "http://127.0.0.1:8001/api/v1/health",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
