@@ -1,0 +1,347 @@
+{
+  "actual": "Both original Loop identities returned QE_PREPARED_ARCHIVE_WORKSPACE_IDENTITY_MISMATCH and remained absent in the run-status API.",
+  "allowed_write_scope": [
+    "backend/services/quantevolver/qe_execution_reservation.py",
+    "backend/services/quantevolver/qe_active_execution_capacity.py",
+    "backend/services/quantevolver/qe_run_registry.py",
+    "backend/services/qe_archive/archive_service.py",
+    "backend/tests/quantevolver/test_qe_prepared_workspace_batch.py",
+    "backend/tests/qe_archive/test_round3_fixes.py",
+    "tests/aistock_validation/bugs/20261125_BUG-2287-qe-prepared-absolute-target-replay-cannot-register-its-workspace-loop.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2287",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-11-25T06:15:18.252400Z",
+  "description": "Both original Loop identities returned QE_PREPARED_ARCHIVE_WORKSPACE_IDENTITY_MISMATCH and remained absent in the run-status API.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261125-74c930ea6ec9",
+      "timestamp": "2026-11-25T06:15:18.252364Z"
+    }
+  ],
+  "evidence_uris": [
+    "tmp/handoff/qe-objectives-r1190-r1193-20261125/R1111BPreparedWsl/completion.json"
+  ],
+  "expected": "Register the exact prepared Loop and archive it without requiring a prediction producer. Reject other unsupported workload modes and mismatched task and Loop identity.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/qe_archive/archive_service.py",
+      "backend/services/quantevolver/qe_active_execution_capacity.py",
+      "backend/services/quantevolver/qe_execution_reservation.py",
+      "backend/services/quantevolver/qe_run_registry.py",
+      "backend/tests/qe_archive/test_round3_fixes.py",
+      "backend/tests/quantevolver/test_qe_prepared_workspace_batch.py",
+      "tests/aistock_validation/bugs/20261125_BUG-2287-qe-prepared-absolute-target-replay-cannot-register-its-workspace-loop.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/services/qe_archive/archive_service.py",
+      "backend/services/quantevolver/qe_active_execution_capacity.py",
+      "backend/services/quantevolver/qe_execution_reservation.py",
+      "backend/services/quantevolver/qe_run_registry.py",
+      "backend/tests/qe_archive/test_round3_fixes.py",
+      "backend/tests/quantevolver/test_qe_prepared_workspace_batch.py",
+      "tests/aistock_validation/bugs/20261125_BUG-2287-qe-prepared-absolute-target-replay-cannot-register-its-workspace-loop.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/quantevolver/qe_execution_reservation.py",
+        "backend/services/quantevolver/qe_active_execution_capacity.py",
+        "backend/services/quantevolver/qe_run_registry.py",
+        "backend/services/qe_archive/archive_service.py",
+        "backend/tests/quantevolver/test_qe_prepared_workspace_batch.py",
+        "backend/tests/qe_archive/test_round3_fixes.py"
+      ],
+      "impacted_modules": [
+        "qe.core",
+        "qe.single_experiment",
+        "qe.custom_evolution",
+        "qe.auto_evolution",
+        "qe.enhanced_metrics",
+        "qe.data_completeness",
+        "qe.archive",
+        "qe.archive_handlers",
+        "paper_v2"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/quantevolver/qe_execution_reservation.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
+        },
+        {
+          "file": "backend/services/quantevolver/qe_active_execution_capacity.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
+        },
+        {
+          "file": "backend/services/quantevolver/qe_run_registry.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
+        },
+        {
+          "file": "backend/services/qe_archive/archive_service.py",
+          "impact_modules": [
+            "qe.data_completeness",
+            "qe.enhanced_metrics"
+          ],
+          "primary_module": "qe.archive",
+          "risk_level": "high",
+          "rule_id": "qe_archive_services"
+        },
+        {
+          "file": "backend/tests/quantevolver/test_qe_prepared_workspace_batch.py",
+          "impact_modules": [
+            "qe.auto_evolution",
+            "qe.enhanced_metrics"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_remaining_tests"
+        },
+        {
+          "file": "backend/tests/qe_archive/test_round3_fixes.py",
+          "impact_modules": [
+            "qe.archive",
+            "qe.data_completeness",
+            "paper_v2"
+          ],
+          "primary_module": "qe.archive_handlers",
+          "risk_level": "high",
+          "rule_id": "qe_archive_handlers"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/quantevolver/qe_execution_reservation.py",
+        "backend/services/quantevolver/qe_active_execution_capacity.py",
+        "backend/services/quantevolver/qe_run_registry.py",
+        "backend/services/qe_archive/archive_service.py",
+        "backend/tests/quantevolver/test_qe_prepared_workspace_batch.py",
+        "backend/tests/qe_archive/test_round3_fixes.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/quantevolver/qe_execution_reservation.py",
+      "backend/services/quantevolver/qe_active_execution_capacity.py",
+      "backend/services/quantevolver/qe_run_registry.py",
+      "backend/services/qe_archive/archive_service.py",
+      "backend/tests/quantevolver/test_qe_prepared_workspace_batch.py",
+      "backend/tests/qe_archive/test_round3_fixes.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/quantevolver/qe_execution_reservation.py",
+      "backend/services/quantevolver/qe_active_execution_capacity.py",
+      "backend/services/quantevolver/qe_run_registry.py",
+      "backend/services/qe_archive/archive_service.py",
+      "backend/tests/quantevolver/test_qe_prepared_workspace_batch.py",
+      "backend/tests/qe_archive/test_round3_fixes.py"
+    ]
+  },
+  "first_seen_at": "2026-11-25T06:15:18.252400Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 7475,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7475",
+  "last_seen_at": "2026-11-25T06:15:18.252400Z",
+  "module": "qe",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "pytest -q backend/tests/quantevolver/test_qe_prepared_workspace_batch.py -k absolute_target",
+  "required_verification": [
+    "l0",
+    "qe_read_backend",
+    "qe_archive_backend"
+  ],
+  "risk_area": "regression",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/execution-policy",
+    "fresh_process_evidence": [
+      "A fresh process loaded the changed registration and archive services from the task worktree. It consumed the exact 31-file pre-reviewed canonical packages for b88bd728/Loop1 and 9f9666c8/Loop2, checked the live WSL dataset binding, two replay slots, frozen input hashes, and absent native Loops, reserved both in a captured SQL transaction, and ran the real terminal archive assembler in dry-run mode. Both registration and archive preserved their exact Loop index. No database write or worker launch. Receipt SHA256 07c0edfbb71d52d7ee01548eb457b946af7469c46a25f6c270035102c2edb504."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_note": "Verify the approved backend-main merge identity and policy endpoint after the user's reload. Reconcile the two original Loop IDs and confirm independent native worker start, exact replay cohort, and completion receipt on the existing R1111 accounts.",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "qe"
+  ],
+  "title": "QE prepared absolute-target replay cannot register its workspace Loop",
+  "trigger_condition": {
+    "fingerprint": "74c930ea6ec96c0e58fc414d",
+    "source_event_id": "FE-20261125-74c930ea6ec9"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "qe",
+        "qe_read",
+        "qe_archive"
+      ],
+      "plans": [
+        "qe_read_backend",
+        "qe_archive_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "qe",
+          "qe_read",
+          "qe_archive"
+        ],
+        "plans": [
+          "qe_read_backend",
+          "qe_archive_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

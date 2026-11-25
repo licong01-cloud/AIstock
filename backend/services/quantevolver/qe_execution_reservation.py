@@ -46,6 +46,7 @@ _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _LOOP_ID_RE = re.compile(r"^Loop[1-9][0-9]*$")
 _RESERVATION_ID_RE = re.compile(r"^qer_[0-9a-f]{64}$")
 PREPARED_WORKSPACE_PARAM = "_qe_prepared_workspace"
+PREPARED_ABSOLUTE_TARGET_MODE = "ABSOLUTE_TARGET_REPLAY"
 
 
 def _transaction_connection() -> AbstractContextManager[Any]:
