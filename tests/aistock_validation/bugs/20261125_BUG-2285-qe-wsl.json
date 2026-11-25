@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2285",
-  "closed_at": null,
+  "closed_at": "2026-11-25T05:29:26.488515Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -151,11 +151,33 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
     "post_restart_note": "Verify the merged backend-main identity and QE execution-policy endpoint after the operator reload. For the first approved frozen-target batch, confirm two WSL admissions retain the pre-reviewed command and file hashes and inspect actual durable reservations and concurrent worker logs. The archived-input rehearsal submits no experiment.",
-    "post_restart_receipt_ref": null,
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-2285/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2285",
+      "business_smoke_semantic": {
+        "contract_id": "qe_batch_execution_policy",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "e49ea55d85a17e74db97ae002f4da0d40fbf7b0441f6386d5a270dbc76470bf6",
+      "contract_digest": "871cf48733f170d661c0e4a1ff63882c135296af190f42b77ede1b462a7f1f4d",
+      "expected_identity": "8498483abe299d543f83a027c5c0b8c06f2383bb",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-11-25T05:26:22.862961Z",
+      "mode": "read_only",
+      "observed_identity": "c9cf14d6586acc563007dffe204d83f8222577d8",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "b4176b39935b05157f7a2c105d77522c6f1006c0fccdc2b8b1479617539be143",
+      "receipt_sha256": "e302c12fc1ee9ce973f023ee8c04ecb45a1980146072d5b39939c084e0a1fa91",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "adebb317c95559422fc5cc16df8ff0d4a6b2ab5e997ee6809957c04fbc558541",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -188,7 +210,7 @@
     ],
     "validation_evidence_digest": "abd82bf1d1910b88635a7b8a55349c79810eeab27aa3c5f893a6a7efb4d7c0d4"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "qe"
   ],
@@ -200,7 +222,8 @@
   "validation_evidence": [
     "validation-receipt: id=7830ae2049c74324 commit=453ef6ef0b3642abe1fab5400a32e2f7341b1330 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
     "validation-receipt: id=92105ffec7549beb commit=453ef6ef0b3642abe1fab5400a32e2f7341b1330 kind=pytest plan=direct status=passed command=`rtk pytest -q backend/tests/quantevolver/test_qe_prepared_workspace_batch.py backend/tests/quantevolver/test_qe_wsl_workload_guard.py backend/tests/multi_alpha/test_qe_submission_coordinator.py -k \"prepared or absolute_targets_share or replay_preserve_four_loop or four_replays or sustained_pressure or bounded_swap\"` result=`34 passed`",
-    "validation-receipt: id=37ad59491022164e commit=453ef6ef0b3642abe1fab5400a32e2f7341b1330 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+    "validation-receipt: id=37ad59491022164e commit=453ef6ef0b3642abe1fab5400a32e2f7341b1330 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`",
+    "python -m nox -s l0 -> passed"
   ],
   "verification_budget": {
     "budget": "light",
