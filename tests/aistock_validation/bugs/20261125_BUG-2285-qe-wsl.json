@@ -117,8 +117,8 @@
   },
   "first_seen_at": "2026-11-25T04:24:49.600985Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "8498483abe299d543f83a027c5c0b8c06f2383bb",
+  "fixed_at": "2026-11-25T05:08:11Z",
   "github_issue_number": 7469,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7469",
   "last_seen_at": "2026-11-25T04:24:49.600985Z",
@@ -126,6 +126,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7472",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -152,6 +153,7 @@
     ],
     "post_restart_effective_gate": "pending_user_restart",
     "post_restart_note": "Verify the merged backend-main identity and QE execution-policy endpoint after the operator reload. For the first approved frozen-target batch, confirm two WSL admissions retain the pre-reviewed command and file hashes and inspect actual durable reservations and concurrent worker logs. The archived-input rehearsal submits no experiment.",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -163,7 +165,30 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2285",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "8a7abdd3d898436f",
+    "recorded_at": "2026-11-25T05:09:23.977067Z",
+    "runtime_contract_digest": "871cf48733f170d661c0e4a1ff63882c135296af190f42b77ede1b462a7f1f4d",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "453ef6ef0b3642abe1fab5400a32e2f7341b1330",
+    "source_merge_commit": "8498483abe299d543f83a027c5c0b8c06f2383bb",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7472",
+    "validation_evidence": [
+      "validation-receipt: id=7830ae2049c74324 commit=453ef6ef0b3642abe1fab5400a32e2f7341b1330 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+      "validation-receipt: id=92105ffec7549beb commit=453ef6ef0b3642abe1fab5400a32e2f7341b1330 kind=pytest plan=direct status=passed command=`rtk pytest -q backend/tests/quantevolver/test_qe_prepared_workspace_batch.py backend/tests/quantevolver/test_qe_wsl_workload_guard.py backend/tests/multi_alpha/test_qe_submission_coordinator.py -k \"prepared or absolute_targets_share or replay_preserve_four_loop or four_replays or sustained_pressure or bounded_swap\"` result=`34 passed`",
+      "validation-receipt: id=37ad59491022164e commit=453ef6ef0b3642abe1fab5400a32e2f7341b1330 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+    ],
+    "validation_evidence_digest": "abd82bf1d1910b88635a7b8a55349c79810eeab27aa3c5f893a6a7efb4d7c0d4"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qe"
   ],
@@ -172,6 +197,11 @@
     "fingerprint": "a8948648a67049a1ed567e74",
     "source_event_id": "FE-20261125-a8948648a670"
   },
+  "validation_evidence": [
+    "validation-receipt: id=7830ae2049c74324 commit=453ef6ef0b3642abe1fab5400a32e2f7341b1330 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+    "validation-receipt: id=92105ffec7549beb commit=453ef6ef0b3642abe1fab5400a32e2f7341b1330 kind=pytest plan=direct status=passed command=`rtk pytest -q backend/tests/quantevolver/test_qe_prepared_workspace_batch.py backend/tests/quantevolver/test_qe_wsl_workload_guard.py backend/tests/multi_alpha/test_qe_submission_coordinator.py -k \"prepared or absolute_targets_share or replay_preserve_four_loop or four_replays or sustained_pressure or bounded_swap\"` result=`34 passed`",
+    "validation-receipt: id=37ad59491022164e commit=453ef6ef0b3642abe1fab5400a32e2f7341b1330 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "light",
     "ci_premerge_plans": [],
