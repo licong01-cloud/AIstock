@@ -48,7 +48,7 @@ python -m scripts.hmm_risk.review_competing_exits --bars exit_bars.parquet --out
 | F-003 | `scripts/hmm_risk/review_planned_additions.py` 的 `planned_reviews` 计算两种复核选择，返回逐股与行业的正需求和资金来源拆分 | `backend/tests/hmm_risk/test_review_planned_additions.py`，两本原账 396 天次产生 792 行，与原始目标、持仓及次日成交对照 | PASS | 无 |
 | F-004 | 同一入口校验原目标行数、账户日期、市值、行业、预警和空选择，支持本地文件和标准输出 | `backend/tests/hmm_risk/test_review_planned_additions.py` 覆盖不完整目标、无新增、错误行与输出一致性；此前 396 行旧仓清单逐字节一致 | PASS | 无 |
 | F-005 | `scripts/hmm_risk/review_competing_buys.py` 比较受限买单与原获资者，保留其他成交、原排序、缺分、两种单位及每日本金去重 | `backend/tests/hmm_risk/test_review_competing_buys.py`，396 个历史账户日中确认 5 个最小单位配对及 51 个完整子单配对，日内共享资金 | PASS | 无 |
-| F-006 | `scripts/hmm_risk/review_competing_exits.py` 用同一清仓目标、原始时钟和成交量核对原卖量与修订股数 | `backend/tests/hmm_risk/test_review_competing_buys.py`，四张已完成清仓母单共 12 个原成交分钟与独立逐笔核算一致 | PASS | 无 |
+| F-006 | `scripts/hmm_risk/review_competing_exits.py` 用同一清仓目标、原始时钟和成交量核对原卖量与修订股数 | `backend/tests/hmm_risk/test_review_competing_exits.py`，四张已完成清仓母单共 12 个原成交分钟与独立逐笔核算一致 | PASS | 无 |
 
 ## 生产门禁与适用方式
 
