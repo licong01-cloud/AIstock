@@ -20,6 +20,7 @@ from backend.db.pg_pool import get_conn
 from backend.services.qe_archive.models import normalize_json
 
 from .node_execution import MAX_QE_NODE_PARALLELISM
+from .qe_absolute_targets import PARAM as ABSOLUTE_TARGET_PARAM
 from .qe_batch_execution_policy import (
     CPU_NODE,
     QE_BACKTEST_LOOP_CAPACITY,
@@ -60,6 +61,8 @@ WSL_BACKTEST_DEFAULT_CAPACITY = 2
 WSL_BACKTEST_HARD_CAPACITY = MAX_QE_NODE_PARALLELISM
 WSL_PARALLEL_TRAINING_HARD_CAPACITY = 2
 REMOTE_HARD_CAPACITY = 4
+PREPARED_ABSOLUTE_TARGET_MODE = "ABSOLUTE_TARGET_REPLAY"
+
 # The coordinator starts immediately and performs a safety sweep at most every
 # 60 seconds.  Keeping durable execution leases below that bound guarantees a
 # replacement backend can take over by its first post-start safety sweep while
@@ -72,6 +75,15 @@ _PROCESS_SUBMISSION_OWNER_ID = (
 _QUEUE_ONLY_LOCK = threading.RLock()
 _QUEUE_ONLY_NODE_DIAGNOSTICS: dict[str, tuple[Mapping[str, Any], ...]] = {}
 logger = logging.getLogger("aistock.qe_execution_capacity")
+
+
+def prepared_workspace_mode(config: Mapping[str, Any]) -> str | None:
+    mode = config.get("workload_mode")
+    if config.get(ABSOLUTE_TARGET_PARAM) is not None:
+        if mode not in (None, PREPARED_ABSOLUTE_TARGET_MODE):
+            raise ValueError("QE_PREPARED_WORKSPACE_MODE_MISMATCH")
+        return PREPARED_ABSOLUTE_TARGET_MODE
+    return mode if isinstance(mode, str) else None
 
 
 class QEWorkspaceSubmissionCoordinatorError(RuntimeError):
@@ -1083,12 +1095,41 @@ class QEWorkspaceSubmissionCoordinator:
         from .config_composer import ConfigComposer
         from .qe_gpu_training_policy import GPU_TRAINING_POLICY_PARALLEL, resolve_gpu_training_policy
 
-        mode = payload.config.get("workload_mode")
+        mode = prepared_workspace_mode(payload.config)
         train = re.findall(r"(?<![\w-])--train-only\b", payload.wsl_command)
         replay = re.findall(r"(?<![\w-])--pred-backtest\b", payload.wsl_command)
+        absolute = re.findall(r"(?:^|\s)--absolute-target-replay(?=\s|$)", payload.wsl_command)
         if source.prepared_batch_sha256 is None or payload.execution_identity_hash != source.submission_intent_hash:
             raise ValueError("QE_PREPARED_WORKSPACE_IDENTITY_MISMATCH")
-        if mode == "PREDICTION_REPLAY" and source.backtest_only and len(replay) == 1 and not train:
+        if absolute and mode != PREPARED_ABSOLUTE_TARGET_MODE:
+            raise ValueError("QE_PREPARED_WORKSPACE_MODE_MISMATCH")
+        if mode == PREPARED_ABSOLUTE_TARGET_MODE:
+            if (not source.backtest_only or len(absolute) != 1 or train or replay
+                    or payload.model_source is not None
+                    or re.search(r"(?<![\w-])--backtest-only\b", payload.wsl_command)):
+                raise ValueError("QE_PREPARED_WORKSPACE_MODE_MISMATCH")
+
+            from .absolute_target_consumer import require_bound_contract
+            from .qe_absolute_targets import MANIFEST_FILE, validate_mode
+
+            # model_params carries the bound dataset and transport metadata. The
+            # original absolute-target config remains model-free.
+            contract = validate_mode({k: v for k, v in payload.config.items() if k != "model_params"})
+            params = payload.config.get("model_params")
+            if not isinstance(params, Mapping):
+                raise ValueError("QE_ABSOLUTE_TARGET_ACTIVE_BINDING_REQUIRED")
+            contract = require_bound_contract(contract, params.get("_qe_active_dataset_summary"))
+            if ABSOLUTE_TARGET_PARAM in params and params[ABSOLUTE_TARGET_PARAM] != contract:
+                raise ValueError("QE_PREPARED_ABSOLUTE_TARGET_CONTRACT_MISMATCH")
+            try:
+                manifest = json.loads(payload.experiment_files.get(MANIFEST_FILE, "null"))
+            except json.JSONDecodeError as exc:
+                raise ValueError("QE_PREPARED_ABSOLUTE_TARGET_MANIFEST_MISMATCH") from exc
+            if manifest != contract:
+                raise ValueError("QE_PREPARED_ABSOLUTE_TARGET_MANIFEST_MISMATCH")
+            kind = "absolute_target_replay"
+            maximum = self._capacity_service.resolve_node_capacity(source.node_id, backtest_only=True)
+        elif mode == "PREDICTION_REPLAY" and source.backtest_only and len(replay) == 1 and not train:
             kind = "prediction_replay"
             maximum = QE_BACKTEST_LOOP_CAPACITY
         elif mode == "TRAIN_ONLY" and not source.backtest_only and len(train) == 1 and not replay:
