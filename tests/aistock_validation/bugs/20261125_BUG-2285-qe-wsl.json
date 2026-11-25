@@ -27,13 +27,20 @@
   "evidence_uris": [],
   "expected": "同批冻结目标回放按现有资源和预约策略申请 WSL 默认两路、远端四路。冻结目标、日期、数据绑定、命令和策略文件逐项验签，重复接续使用原身份。",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261125_BUG-2285-qe-wsl.json",
       "backend/services/quantevolver/qe_active_execution_capacity.py",
       "backend/services/quantevolver/qe_prepared_workspace_batch.py",
       "backend/tests/quantevolver/test_qe_prepared_workspace_batch.py"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261125_BUG-2285-qe-wsl.json",
+      "backend/services/quantevolver/qe_active_execution_capacity.py",
+      "backend/services/quantevolver/qe_prepared_workspace_batch.py",
+      "backend/tests/quantevolver/test_qe_prepared_workspace_batch.py"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/quantevolver/qe_active_execution_capacity.py",
@@ -131,11 +138,21 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/execution-policy",
+    "fresh_process_evidence": [
+      "Fresh process from BUG-2285 worktree loaded both changed modules and verified archived WSL Loop2/Loop3 original 31-file bundles, exact command SHA, R1070 execution code, frozen dataset identity and two-slot batch admission. Transport capture only. Receipt SHA256 e609e0b946a516f4848b8aa7082c374f633dc431fa6fec033cacbcf3c50dce98."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "post_restart_note": "Verify the merged backend-main identity and QE execution-policy endpoint after the operator reload. For the first approved frozen-target batch, confirm two WSL admissions retain the pre-reviewed command and file hashes and inspect actual durable reservations and concurrent worker logs. The archived-input rehearsal submits no experiment.",
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
