@@ -1098,7 +1098,7 @@ class QEWorkspaceSubmissionCoordinator:
         mode = prepared_workspace_mode(payload.config)
         train = re.findall(r"(?<![\w-])--train-only\b", payload.wsl_command)
         replay = re.findall(r"(?<![\w-])--pred-backtest\b", payload.wsl_command)
-        absolute = re.findall(r"(?<![\w-])--absolute-target-replay\b", payload.wsl_command)
+        absolute = re.findall(r"(?:^|\s)--absolute-target-replay(?=\s|$)", payload.wsl_command)
         if source.prepared_batch_sha256 is None or payload.execution_identity_hash != source.submission_intent_hash:
             raise ValueError("QE_PREPARED_WORKSPACE_IDENTITY_MISMATCH")
         if absolute and mode != PREPARED_ABSOLUTE_TARGET_MODE:
@@ -1116,8 +1116,11 @@ class QEWorkspaceSubmissionCoordinator:
             # original absolute-target config remains model-free.
             contract = validate_mode({k: v for k, v in payload.config.items() if k != "model_params"})
             params = payload.config.get("model_params")
-            summary = params.get("_qe_active_dataset_summary") if isinstance(params, Mapping) else None
-            contract = require_bound_contract(contract, summary)
+            if not isinstance(params, Mapping):
+                raise ValueError("QE_ABSOLUTE_TARGET_ACTIVE_BINDING_REQUIRED")
+            contract = require_bound_contract(contract, params.get("_qe_active_dataset_summary"))
+            if ABSOLUTE_TARGET_PARAM in params and params[ABSOLUTE_TARGET_PARAM] != contract:
+                raise ValueError("QE_PREPARED_ABSOLUTE_TARGET_CONTRACT_MISMATCH")
             try:
                 manifest = json.loads(payload.experiment_files.get(MANIFEST_FILE, "null"))
             except json.JSONDecodeError as exc:

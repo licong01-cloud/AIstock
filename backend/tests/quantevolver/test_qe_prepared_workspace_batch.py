@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+from base64 import b64encode
 from contextlib import asynccontextmanager
 from dataclasses import replace
+from hashlib import sha256
 import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -143,9 +145,10 @@ def test_prepared_workspace_keeps_same_worker_and_registration_on_resume(monkeyp
     assert saved["custom_params"]["_qe_archive_replay_source"]["source_loop_index"] == 2
 
 def _absolute_payload(loop=1):
+    raw_targets = b"frozen target bytes"
     contract = {
         "schema_version": "qe_absolute_target_replay_v2", "arm": "T",
-        "targets": {"path": "/assets/frozen.parquet", "sha256": "d" * 64},
+        "targets": {"path": "/assets/frozen.parquet", "sha256": sha256(raw_targets).hexdigest()},
         "dataset": {"release_id": "frozen", "manifest_sha256": "b" * 64, "profile_sha256": "e" * 64},
         "window": {
             "signal_start": "2026-10-28", "signal_end": "2026-10-29",
@@ -166,6 +169,7 @@ def _absolute_payload(loop=1):
         }},
         experiment_files={
             "conf.yaml": "frozen",
+            "absolute_targets.parquet.b64": b64encode(raw_targets).decode("ascii"),
             "qe_absolute_target_manifest.json": json.dumps(contract),
             "h40_execution_basis.py": "execution_basis_from_review",
         },
@@ -206,6 +210,44 @@ def test_prepared_absolute_target_rejects_mixed_commands(flag):
     mixed = replace(payload, wsl_command=f"{payload.wsl_command} {flag}")
     with pytest.raises(ValueError, match="MODE_MISMATCH"):
         QEWorkspaceSubmissionCoordinator().prepared_workspace_contract(_absolute_source("wsl2-5080"), mixed)
+
+
+def test_prepared_absolute_target_requires_the_standalone_command_flag():
+    payload = replace(_absolute_payload(), wsl_command="qrun conf.yaml --absolute-target-replay-preview")
+    with pytest.raises(ValueError, match="MODE_MISMATCH"):
+        QEWorkspaceSubmissionCoordinator().prepared_workspace_contract(_absolute_source("wsl2-5080"), payload)
+
+
+def test_prepared_absolute_target_rejects_conflicting_nested_contract():
+    payload = _absolute_payload()
+    payload.config["model_params"]["absolute_target_replay"] = {**payload.config["absolute_target_replay"], "arm": "B"}
+    with pytest.raises(ValueError, match="ABSOLUTE_TARGET_CONTRACT_MISMATCH"):
+        QEWorkspaceSubmissionCoordinator().prepared_workspace_contract(_absolute_source("wsl2-5080"), payload)
+
+
+@pytest.mark.parametrize("encoded", [None, "not base64", "d3Jvbmc="])
+def test_prepared_absolute_target_rejects_corrupt_bytes_before_registration(monkeypatch, encoded):
+    payload = _absolute_payload()
+    files = dict(payload.experiment_files)
+    if encoded is None:
+        files.pop("absolute_targets.parquet.b64")
+    else:
+        files["absolute_targets.parquet.b64"] = encoded
+
+    async def build(_):
+        return replace(payload, experiment_files=files)
+
+    client = Mock()
+    monkeypatch.setattr(QEWorkspaceClient, "for_node", client)
+    batch = QEPreparedWorkspaceBatch()
+    register = Mock()
+    monkeypatch.setattr(batch._registry, "reserve_single", register)
+    job = PreparedWorkspaceJob("Loop1", "account-id", "wsl2-5080", "/w/frozen/Loop1", build, Mock())
+    result = asyncio.run(batch.run("a" * 64, [job], dataset_manifest_sha256="b" * 64, timeout_seconds=2))
+    assert result["Loop1"].state == "requires_reconciliation"
+    assert "QE_PREPARED_ABSOLUTE_TARGET_BYTES_MISMATCH" in result["Loop1"].detail
+    client.assert_not_called()
+    register.assert_not_called()
 
 
 def test_prepared_absolute_target_validates_manifest_and_release():

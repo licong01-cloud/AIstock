@@ -28,17 +28,17 @@
   "expected": "同批冻结目标回放按现有资源和预约策略申请 WSL 默认两路、远端四路。冻结目标、日期、数据绑定、命令和策略文件逐项验签，重复接续使用原身份。",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261125_BUG-2285-qe-wsl.json",
       "backend/services/quantevolver/qe_active_execution_capacity.py",
       "backend/services/quantevolver/qe_prepared_workspace_batch.py",
-      "backend/tests/quantevolver/test_qe_prepared_workspace_batch.py"
+      "backend/tests/quantevolver/test_qe_prepared_workspace_batch.py",
+      "tests/aistock_validation/bugs/20261125_BUG-2285-qe-wsl.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261125_BUG-2285-qe-wsl.json",
       "backend/services/quantevolver/qe_active_execution_capacity.py",
       "backend/services/quantevolver/qe_prepared_workspace_batch.py",
-      "backend/tests/quantevolver/test_qe_prepared_workspace_batch.py"
+      "backend/tests/quantevolver/test_qe_prepared_workspace_batch.py",
+      "tests/aistock_validation/bugs/20261125_BUG-2285-qe-wsl.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -140,7 +140,8 @@
     "backend_restart_owner": "user",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/execution-policy",
     "fresh_process_evidence": [
-      "Fresh process from BUG-2285 worktree loaded both changed modules and verified archived WSL Loop2/Loop3 original 31-file bundles, exact command SHA, R1070 execution code, frozen dataset identity and two-slot batch admission. Transport capture only. Receipt SHA256 e609e0b946a516f4848b8aa7082c374f633dc431fa6fec033cacbcf3c50dce98."
+      "Fresh process from BUG-2285 worktree loaded both changed modules and verified archived WSL Loop2/Loop3 original 31-file bundles, exact command SHA, R1070 execution code, frozen dataset identity and two-slot batch admission. Transport capture only. Receipt SHA256 e609e0b946a516f4848b8aa7082c374f633dc431fa6fec033cacbcf3c50dce98.",
+      "Second independent fresh-process review on the hardened source passed for archived WSL 28fb1b1a and 8458ac25. Each 31-file package, original command and R1070 execution basis hashes matched, including the decoded target bytes before admission. Two-slot admission rehearsal with actual dataset identity readback; no scientific runs. Receipt SHA256 45a7c91b923965e7a32634181c057c29f1a4ce0b68965f15d7cb0ce51b767b60."
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
