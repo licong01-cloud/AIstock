@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from base64 import b64decode
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
 from graphlib import TopologicalSorter
+from hashlib import sha256
 import json
 from pathlib import Path
 import re
@@ -21,11 +23,14 @@ import httpx
 
 from .config_composer import ConfigComposer
 from .frozen_inference_contract import canonical_sha
+from .qe_absolute_targets import PARAM as ABSOLUTE_TARGET_PARAM, TARGET_FILE
 from .qe_active_execution_capacity import (
+    PREPARED_ABSOLUTE_TARGET_MODE,
     QEWorkspaceSubmissionCoordinator,
     QEWorkspaceSubmissionPayload,
     QEWorkspaceSubmissionSource,
     QEExecutionSourceClaimFactory,
+    prepared_workspace_mode,
     qe_submission_owner_id,
 )
 from .qe_batch_execution_policy import CPU_NODE, GPU_NODE, loop_compute_kind
@@ -63,9 +68,10 @@ class PreparedWorkspaceJobResult:
 
 def prepared_workspace_node(config: Mapping[str, Any]) -> str:
     """Choose the node before composing a node-bound payload."""
-    if config.get("workload_mode") == "PREDICTION_REPLAY":
+    mode = prepared_workspace_mode(config)
+    if mode in ("PREDICTION_REPLAY", PREPARED_ABSOLUTE_TARGET_MODE):
         return CPU_NODE
-    if config.get("workload_mode") != "TRAIN_ONLY":
+    if mode != "TRAIN_ONLY":
         raise ValueError("QE_PREPARED_WORKSPACE_MODE_MISMATCH")
     info = ConfigComposer()._get_model_info(config.get("model_id"))
     return GPU_NODE if loop_compute_kind(config, info) == "gpu" else CPU_NODE
@@ -159,10 +165,22 @@ class QEPreparedWorkspaceBatch:
             source_kind="qe_experiment", source_execution_id=job.experiment_id, node_id=job.node_id,
             submission_intent_hash=identity, owner_id=qe_submission_owner_id(),
             claim_source=claim, record_waiting_capacity=wait,
-            backtest_only=payload.config.get("workload_mode") == "PREDICTION_REPLAY",
+            backtest_only=prepared_workspace_mode(payload.config) in (
+                "PREDICTION_REPLAY", PREPARED_ABSOLUTE_TARGET_MODE,
+            ),
             prepared_batch_sha256=batch_sha256,
         )
         contract = self._coordinator.prepared_workspace_contract(source, payload)
+        if contract["workload"] == PREPARED_ABSOLUTE_TARGET_MODE:
+            target = payload.config[ABSOLUTE_TARGET_PARAM]["targets"]
+            try:
+                raw_targets = b64decode(payload.experiment_files[f"{TARGET_FILE}.b64"], validate=True)
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ValueError("QE_PREPARED_ABSOLUTE_TARGET_BYTES_MISMATCH") from exc
+            if sha256(raw_targets).hexdigest() != target["sha256"]:
+                raise ValueError("QE_PREPARED_ABSOLUTE_TARGET_BYTES_MISMATCH")
+            # Verify once before enrolling, outside the capacity retry loop.
+            del raw_targets
         async with QEWorkspaceClient.for_node(job.node_id) as client:
             await self._verify_node_binding(client, job.node_id, payload.config, dataset_manifest_sha256)
             params = self._reserve(job, payload, contract)
@@ -213,6 +231,9 @@ class QEPreparedWorkspaceBatch:
         config = payload.config
         params = {**dict(config.get("model_params") or {}), PREPARED_WORKSPACE_PARAM: dict(contract),
                   "execution_node_id": job.node_id}
+        mode = contract["workload"]
+        if mode == PREPARED_ABSOLUTE_TARGET_MODE:
+            params[ABSOLUTE_TARGET_PARAM] = config[ABSOLUTE_TARGET_PARAM]
         factor_names = list(config.get("factor_list") or ())
         split = dict(config.get("data_split") or {})
         params[QE_RUN_REGISTRATION_PARAM] = build_qe_run_registration(
@@ -221,7 +242,7 @@ class QEPreparedWorkspaceBatch:
             data_split=split, task_id=payload.task_id, loop_index=payload.loop_index,
         )
         params.pop(QE_ARCHIVE_REPLAY_SOURCE_PARAM, None)
-        if config.get("workload_mode") == "PREDICTION_REPLAY":
+        if mode == "PREDICTION_REPLAY":
             source_ref = normalize_archive_replay_source(
                 payload.experiment_files.get("qe_prediction_replay_source_ref.json")
             )
@@ -230,7 +251,10 @@ class QEPreparedWorkspaceBatch:
         existing = self._composer._get_experiment_record(job.experiment_id)
         if existing is not None:
             registered = existing.get("custom_params") or {}
-            if any(registered.get(k) != params[k] for k in (PREPARED_WORKSPACE_PARAM, QE_RUN_REGISTRATION_PARAM)):
+            identity_keys = [PREPARED_WORKSPACE_PARAM, QE_RUN_REGISTRATION_PARAM]
+            if mode == PREPARED_ABSOLUTE_TARGET_MODE:
+                identity_keys.append(ABSOLUTE_TARGET_PARAM)
+            if any(registered.get(k) != params[k] for k in identity_keys):
                 raise ValueError("QE_PREPARED_WORKSPACE_EXISTING_IDENTITY_CHANGED")
             if QE_ARCHIVE_REPLAY_SOURCE_PARAM not in registered:
                 # Resume legacy admissions with their original submitted config.
