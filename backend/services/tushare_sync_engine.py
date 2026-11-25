@@ -39,7 +39,7 @@ from .tushare_dataset_specs import (
     DAILY_BASIC, DatasetSpec, QueryMode, complete_stk_limit_daily_references, stk_limit_prices_valid,
 )
 
-PIT_SOURCE_DATASETS = {"stock_basic", "stock_st", "stock_st_events"}
+PIT_SOURCE_DATASETS = {"stock_basic", "stock_st"}
 FINANCIAL_EVENT_RAW_DATASETS = {
     "tushare_forecast_raw": "forecast",
     "tushare_express_raw": "express",
@@ -2259,27 +2259,18 @@ class TushareSyncEngine:
         """Maintain the shared canonical PIT after source-table sync succeeds."""
 
         try:
-            from .stock_universe_pit_service import StockUniversePitService, DEFAULT_ST_PIT_START_DATE
+            from .stock_universe_pit_service import DEFAULT_ST_PIT_START_DATE, StockUniversePitService
 
             service = StockUniversePitService(existing_schema_only=True)
-            plan = service.plan_canonical_pit_universe(
-                start_date=DEFAULT_ST_PIT_START_DATE,
-                end_date=service.resolve_default_end_date(),
-            )
-            if plan.get("coverage_satisfied") is True and plan.get("needs_rebuild") is False:
-                return {"ok": True, "ensure": {"status": "ready", "rebuilt": False,
-                                                "reason": "canonical_already_current"}}
-            # The builder now commits spans and ready state atomically. Do not
-            # invalidate the published view before the replacement is validated.
-            result: Dict[str, Any] = {"published_state_preserved_during_build": True}
-            result["ensure"] = service.ensure_canonical_pit_universe(
-                start_date=DEFAULT_ST_PIT_START_DATE,
-                strict=False,
-            )
-            ready = result["ensure"].get("status") == "ready"
+            result = service.advance_canonical_trade_day()
+            if result.get("reason") == "published_canonical_not_ready":
+                # Bootstrap or rebuild a non-ready view from the same snapshot
+                # source. An active ready view only uses the bounded daily roll.
+                result = service.ensure_canonical_pit_universe(start_date=DEFAULT_ST_PIT_START_DATE, strict=False)
+            ready = result.get("status") == "ready"
             if not ready:
-                _logger.warning("canonical PIT maintenance incomplete after %s: %s", dataset, result["ensure"])
-            return {"ok": ready, **result}
+                _logger.warning("canonical PIT maintenance incomplete after %s: %s", dataset, result)
+            return {"ok": ready, "published_state_preserved_during_build": True, "ensure": result}
         except Exception as exc:  # noqa: BLE001
             # Source sync success must not be turned into a fake failure. The
             # Online consumers never repair facts. Preserve the derived failure
