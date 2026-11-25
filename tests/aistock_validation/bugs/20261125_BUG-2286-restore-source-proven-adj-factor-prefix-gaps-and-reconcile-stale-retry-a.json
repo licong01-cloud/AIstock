@@ -31,23 +31,23 @@
   "expected": "Exact verified dates can be backfilled without changing existing factors or representing unavailable history as complete; queued work remains visible with its real status. Certified listing suspensions are counted as legal absent only for the exact dated identities without contrary positive trades.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261125_BUG-2286-restore-source-proven-adj-factor-prefix-gaps-and-reconcile-stale-retry-a.json",
       "backend/ingestion/tdx_scheduler.py",
       "backend/services/adj_factor_history_reconciler.py",
       "backend/services/data_integrity/validation.py",
       "backend/tests/ingestion/test_tdx_scheduler_adj_factor.py",
       "backend/tests/services/test_adj_factor_history_reconciler.py",
-      "backend/tests/test_daily_data_integrity.py"
+      "backend/tests/test_daily_data_integrity.py",
+      "tests/aistock_validation/bugs/20261125_BUG-2286-restore-source-proven-adj-factor-prefix-gaps-and-reconcile-stale-retry-a.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261125_BUG-2286-restore-source-proven-adj-factor-prefix-gaps-and-reconcile-stale-retry-a.json",
       "backend/ingestion/tdx_scheduler.py",
       "backend/services/adj_factor_history_reconciler.py",
       "backend/services/data_integrity/validation.py",
       "backend/tests/ingestion/test_tdx_scheduler_adj_factor.py",
       "backend/tests/services/test_adj_factor_history_reconciler.py",
-      "backend/tests/test_daily_data_integrity.py"
+      "backend/tests/test_daily_data_integrity.py",
+      "tests/aistock_validation/bugs/20261125_BUG-2286-restore-source-proven-adj-factor-prefix-gaps-and-reconcile-stale-retry-a.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -140,8 +140,8 @@
   },
   "first_seen_at": "2026-11-25T04:27:57.026225Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "8d29d16c1287c78bf79a54e442076c17300ad1b5",
+  "fixed_at": "2026-11-25T04:44:38Z",
   "github_issue_number": 7470,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7470",
   "last_seen_at": "2026-11-25T04:27:57.026225Z",
@@ -149,6 +149,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7471",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -176,6 +177,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -187,7 +189,30 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2286",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "c90be663600d24c0",
+    "recorded_at": "2026-11-25T04:45:51.119285Z",
+    "runtime_contract_digest": "b14f6c5b21957edc938bbe9c976b0e0fc6073b9bfcb833dc7e50b39ce3dde150",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "1447dfcb44364b8a51925f0cf3602a15c77c14dc",
+    "source_merge_commit": "8d29d16c1287c78bf79a54e442076c17300ad1b5",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7471",
+    "validation_evidence": [
+      "python -m nox -s l0 -- --changed-only -> passed, 0 blocking",
+      "rtk pytest -q backend/tests/services/test_adj_factor_history_reconciler.py backend/tests/ingestion/test_tdx_scheduler_adj_factor.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py -> passed 299, one skipped",
+      "rtk pytest -q backend/tests/test_daily_data_integrity.py -k adj_factor -> passed 8; existing DEV insert/readback/rollback passed; production read-only rehearsal 309 planned, 3476 matched, zero writes; real historical validator and reopened scheduler sweep passed."
+    ],
+    "validation_evidence_digest": "aba8baf2d829b6e82fd3c77ab10711a78763a81346eb0f3ffb834f385af61f18"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -196,6 +221,11 @@
     "fingerprint": "88d4f4e187de8b72b50e4d3b",
     "source_event_id": "FE-20261125-88d4f4e187de"
   },
+  "validation_evidence": [
+    "python -m nox -s l0 -- --changed-only -> passed, 0 blocking",
+    "rtk pytest -q backend/tests/services/test_adj_factor_history_reconciler.py backend/tests/ingestion/test_tdx_scheduler_adj_factor.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py -> passed 299, one skipped",
+    "rtk pytest -q backend/tests/test_daily_data_integrity.py -k adj_factor -> passed 8; existing DEV insert/readback/rollback passed; production read-only rehearsal 309 planned, 3476 matched, zero writes; real historical validator and reopened scheduler sweep passed."
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
