@@ -1338,9 +1338,12 @@ class TDXScheduler:
                        WHEN 'sw_sector' THEN 'sw_daily' ELSE t.dataset END
                   AND p.trade_date=t.target_date AND p.data_source='canonical_db'
                 WHERE (target_status = 'final_blocked'
-                    OR (target_status = 'reconciled' AND EXISTS (
+                    OR ((target_status = 'reconciled' OR (t.dataset='adj_factor'
+                         AND t.data_source='integrity_repair' AND t.target_status IN ('pending','retry'))) AND EXISTS (
                         SELECT 1 FROM market.data_alerts AS a
                         WHERE a.dataset=t.dataset AND NOT a.acknowledged
+                          AND (t.target_status='reconciled' OR (a.alert_type='retry_exhausted'
+                               AND a.details->>'alert_gate'='data_sync_targets_final_state'))
                           AND (a.alert_type IN ('retry_exhausted','retry_pending')
                             OR (a.alert_type='gap' AND a.details->>'retry_result'='pending'
                               AND a.details->>'alert_gate'='data_sync_targets_final_state'))
@@ -3003,9 +3006,12 @@ class TDXScheduler:
         for target in targets:
             status = str(target.get("target_status") or target.get("status") or "").lower()
             failure_category = str(target.get("failure_category") or "retry_exhausted")
-            if status not in {"final_blocked", "reconciled"} and failure_category not in {"db_unavailable", "provider_contract_error"}:
-                continue
             dataset = str(target.get("dataset") or "?")
+            reopened = (dataset == "adj_factor" and target.get("data_source") == "integrity_repair"
+                        and status in {"pending", "retry"})
+            if (not reopened and status not in {"final_blocked", "reconciled"}
+                    and failure_category not in {"db_unavailable", "provider_contract_error"}):
+                continue
             target_date = target.get("target_date")
             recovery_ids = []
             if target_date is not None:
@@ -3019,13 +3025,13 @@ class TDXScheduler:
                     (SELECT to_jsonb(p) FROM market.dataset_date_refresh_audit p
                      WHERE dataset=%s AND trade_date=%s AND data_source='canonical_db') AS partition,
                     ARRAY(SELECT target_id FROM market.data_sync_targets t
-                        WHERE dataset=ANY(%s) AND target_date=%s AND target_id IS DISTINCT FROM %s
+                        WHERE dataset=ANY(%s) AND target_date=%s AND (target_id IS DISTINCT FROM %s OR %s)
                           AND target_status IN ('pending','retry')
                           AND COALESCE(target_scope->>'operation','FETCH')<>'VALIDATE_ONLY'
                           AND (data_source='integrity_repair' OR required_before IS NULL
                                OR required_before>clock_timestamp() OR dataset=ANY(%s))) AS recovery_target_ids""",
                     (canonical, target_date, sorted(family), target_date, target.get("target_id"),
-                     list(LATE_PUBLICATION_TAIL_DAYS)))
+                     reopened, list(LATE_PUBLICATION_TAIL_DAYS)))
                 context = observed[0] if observed else {}
                 partition = effective_partition(context.get("partition"),
                     scope_version=SCOPE_VERSION, rule_version=RULE_VERSION)
@@ -3035,8 +3041,8 @@ class TDXScheduler:
                         context={"canonical_validation_id": partition["validation_id"]})
                     continue
                 recovery_ids = context.get("recovery_target_ids") or []
-            if status == "reconciled":
-                continue  # success of a fetch target alone is not a validated partition
+            if status == "reconciled" or (reopened and not recovery_ids):
+                continue  # a reopened alarm may only be replaced by observed pending repair
             alerts.append(
                 classify_retry_alert(dataset, "exhausted", original_status=failure_category,
                                      attempt_count=target.get("attempt_count"))

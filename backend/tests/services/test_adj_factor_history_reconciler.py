@@ -405,6 +405,44 @@ def test_reconcile_fails_closed_when_provider_omits_a_raw_price_date() -> None:
     assert repository.apply_calls == 0
 
 
+def test_verified_prefix_repair_inserts_only_named_rows_and_is_idempotent():
+    symbol = "000005.SZ"
+    first_local = DAY_3 + dt.timedelta(days=3)
+    last = first_local + dt.timedelta(days=1)
+    local_rows = [(first_local, "3.5"), (last, "4.0")]
+    source_rows = _provider_rows(symbol, [(DAY_1, "3.5"), (DAY_2, "3.5"), (DAY_3, "3.5"), *local_rows])
+    repository = _Repository({symbol: _snapshot(symbol, _rows(symbol, local_rows))}, {symbol: frozenset()})
+    reconciler = _reconciler(repository, _SequencedProvider({symbol: [source_rows]}))
+
+    dry = reconciler.repair_verified_prefix(symbol=symbol, dates=[DAY_1, DAY_3], end_date=last, dry_run=True)
+    assert dry["addition_dates"] == [DAY_1.isoformat(), DAY_3.isoformat()]
+    assert dry["written_row_count"] == repository.apply_calls == 0
+    applied = reconciler.repair_verified_prefix(symbol=symbol, dates=[DAY_1, DAY_3], end_date=last)
+    assert applied["written_row_count"] == 2
+    assert repository.snapshots[symbol].rows == _rows(symbol, [(DAY_1, "3.5"), (DAY_3, "3.5"), *local_rows])
+    assert reconciler.repair_verified_prefix(symbol=symbol, dates=[DAY_1, DAY_3], end_date=last)["status"] == "unchanged"
+    assert repository.apply_calls == 1
+
+
+@pytest.mark.parametrize("target_present,changed_overlap,error", [
+    (False, False, "lacks a requested"),
+    (True, True, "exact local suffix"),
+])
+def test_prefix_repair_rejects_unproven_source_keys_and_restatements(target_present, changed_overlap, error):
+    symbol = "000005.SZ"
+    earlier = DAY_1 - dt.timedelta(days=1)
+    local = _snapshot(symbol, _rows(symbol, [(DAY_2, "3"), (DAY_3, "4")]))
+    upstream = [(earlier, "3"), (DAY_2, "3" if not changed_overlap else "3.1"), (DAY_3, "4")]
+    if target_present:
+        upstream.append((DAY_1, "3"))
+    repository = _Repository({symbol: local}, {symbol: frozenset()})
+    reconciler = _reconciler(repository, _SequencedProvider({symbol: [_provider_rows(symbol, upstream)]}))
+
+    with pytest.raises(AdjFactorHistoryReconcileError, match=error):
+        reconciler.repair_verified_prefix(symbol=symbol, dates=[DAY_1], end_date=DAY_3)
+    assert repository.apply_calls == 0
+
+
 def test_reconcile_retains_only_a_bounded_nontrading_source_omission() -> None:
     symbol = "002231.SZ"
     local = _snapshot(
