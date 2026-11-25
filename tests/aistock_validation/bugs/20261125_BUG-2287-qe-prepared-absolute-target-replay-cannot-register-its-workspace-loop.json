@@ -189,10 +189,16 @@
   "risk_area": "regression",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/execution-policy",
+    "fresh_process_evidence": [
+      "A fresh process loaded the changed registration and archive services from the task worktree. It consumed the exact 31-file pre-reviewed canonical packages for b88bd728/Loop1 and 9f9666c8/Loop2, checked the live WSL dataset binding, two replay slots, frozen input hashes, and absent native Loops, reserved both in a captured SQL transaction, and ran the real terminal archive assembler in dry-run mode. Both registration and archive preserved their exact Loop index. No database write or worker launch. Receipt SHA256 07c0edfbb71d52d7ee01548eb457b946af7469c46a25f6c270035102c2edb504."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "planned_scope",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_note": "Verify the approved backend-main merge identity and policy endpoint after the user's reload. Reconcile the two original Loop IDs and confirm independent native worker start, exact replay cohort, and completion receipt on the existing R1111 accounts.",
     "provisional": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",

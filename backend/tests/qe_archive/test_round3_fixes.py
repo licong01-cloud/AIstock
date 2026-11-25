@@ -186,6 +186,39 @@ def test_prepared_archive_refuses_registered_loop_conflict_and_stale_artifact_fa
     assert result.stats["prediction_store_link"]["status"] == "workspace_manifest_identity_mismatch"
 
 
+def test_prepared_absolute_replay_archives_its_loop_without_a_prediction_producer():
+    row = _prepared_row("ABSOLUTE_TARGET_REPLAY", index=2)
+    row["model_id"] = None
+    payload = QEArchiveSourceAssembler.build_experiment_payload(row)
+    assert payload["loop_index"] == 2
+    payload.update(
+        loop_index=1, recorder_id="native-account-recorder", recorder_experiment_id="native-account-exp",
+        prediction_store_manifest=_store_manifest(1, "train_only"),
+    )
+
+    class NoModelStore:
+        def resolve_archive_manifest(self, **kwargs):
+            pytest.fail(f"Model-free absolute replay attempted a Prediction Store lookup: {kwargs}")
+
+    result = QEArchiveService(repository=object(), model_store_service=NoModelStore()).process_payload(payload)
+    assert result.extracted.run.loop_index == 2
+    assert result.extracted.source.recorder_id == "native-account-recorder"
+    assert result.extracted.source.recorder_experiment_id == "native-account-exp"
+    assert result.stats["prediction_store_link"]["status"] == "not_applicable"
+    assert not result.extracted.artifact_manifest
+
+
+@pytest.mark.parametrize(("workload", "loop_id"), [
+    ("ABSOLUTE_TARGET_REPLAY", "Loop1"),
+    ("ABSOLUTE_TARGET_REPLAY_PREVIEW", "Loop2"),
+])
+def test_absolute_replay_archive_does_not_accept_a_different_loop_or_workload(workload, loop_id):
+    row = _prepared_row(workload, index=2)
+    row["qe_loop_id"] = loop_id
+    with pytest.raises(ValueError, match="QE_PREPARED_ARCHIVE_WORKSPACE_IDENTITY_MISMATCH"):
+        QEArchiveSourceAssembler.build_experiment_payload(row)
+
+
 # ---------------------------------------------------------------------------
 # P1.1 — SCD2 replay completion marker
 # ---------------------------------------------------------------------------

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from base64 import b64encode
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 from dataclasses import replace
 from hashlib import sha256
 import json
@@ -266,8 +266,22 @@ def test_prepared_absolute_target_retains_reviewed_files_and_submits_two_sibling
     async def scenario():
         batch = QEPreparedWorkspaceBatch()
         saved = {}
-        register = Mock(side_effect=lambda **kw: saved.setdefault(kw["experiment_id"], kw["custom_params"]))
-        monkeypatch.setattr(batch._registry, "reserve_single", register)
+        persisted_indexes = {}
+        cursor = Mock()
+
+        def sql(query, values):
+            experiment_id = values[0]
+            if query.lstrip().startswith("INSERT INTO qe_experiments"):
+                assert experiment_id not in saved
+                saved[experiment_id] = json.loads(values[6])
+                persisted_indexes[experiment_id] = values[-1]
+            else:
+                assert query.startswith("SELECT experiment_id, status, custom_params")
+                cursor.fetchone.return_value = (experiment_id, "created", saved[experiment_id])
+
+        cursor.execute.side_effect = sql
+        connection = SimpleNamespace(cursor=lambda: nullcontext(cursor))
+        monkeypatch.setattr(batch._registry, "_transaction", lambda: nullcontext(connection))
         monkeypatch.setattr(batch._composer, "_get_experiment_record",
                             lambda key: {"custom_params": saved[key]} if key in saved else None)
         both_submitted = asyncio.Event()
@@ -312,9 +326,9 @@ def test_prepared_absolute_target_retains_reviewed_files_and_submits_two_sibling
 
         for _ in range(2):
             results = await batch.run("a" * 64, [job(1), job(2)], dataset_manifest_sha256="b" * 64, timeout_seconds=2)
-            assert [r.state for r in results.values()] == ["verified", "verified"]
+            assert all(r.state == "verified" for r in results.values()), results
         assert len(set(seen.values())) == 2
-        assert register.call_count == 2
+        assert persisted_indexes == {"Loop1": 1, "Loop2": 2}
         assert all(p["absolute_target_replay"] == _absolute_payload().config["absolute_target_replay"]
                    for p in saved.values())
 

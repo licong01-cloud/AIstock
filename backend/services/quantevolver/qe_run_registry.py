@@ -18,7 +18,7 @@ from typing import Any
 from psycopg2.extras import RealDictCursor
 
 from ...db.pg_pool import get_conn
-from .qe_execution_reservation import PREPARED_WORKSPACE_PARAM
+from .qe_execution_reservation import PREPARED_ABSOLUTE_TARGET_MODE, PREPARED_WORKSPACE_PARAM
 
 
 QE_RUN_REGISTRATION_PARAM = "_qe_run_registration"
@@ -58,7 +58,7 @@ def prepared_workspace_loop_index(
         and registered_task == prepared.get("task_id")
         and type(index) is int and index > 0
         and prepared.get("loop_id") == f"Loop{index}"
-        and prepared.get("workload") in ("TRAIN_ONLY", "PREDICTION_REPLAY")
+        and prepared.get("workload") in ("TRAIN_ONLY", "PREDICTION_REPLAY", PREPARED_ABSOLUTE_TARGET_MODE)
         and (not task_id or task_id == registered_task)
         and (not loop_id or loop_id in (f"Loop{index}", f"{registered_task}_Loop{index}"))
     ):

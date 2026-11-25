@@ -12,7 +12,10 @@ from datetime import datetime, timezone
 from typing import Any, Mapping
 
 from backend.services.model_store.service import ModelStoreService
-from backend.services.quantevolver.qe_execution_reservation import PREPARED_WORKSPACE_PARAM
+from backend.services.quantevolver.qe_execution_reservation import (
+    PREPARED_ABSOLUTE_TARGET_MODE,
+    PREPARED_WORKSPACE_PARAM,
+)
 from backend.services.quantevolver.qe_run_registry import (
     QE_ARCHIVE_REPLAY_SOURCE_PARAM,
     normalize_archive_replay_source,
@@ -393,8 +396,15 @@ class QEArchiveService:
         loop = prepared_workspace_loop_index(flags, task_id=task, loop_id=loop_id)
         mode = flags[PREPARED_WORKSPACE_PARAM]["workload"]
         payload["loop_index"] = loop
-        for key in ("prediction_store_manifest", "mlflow_artifact_uri", "recorder_id", "recorder_experiment_id",
-                    "prediction_replay_lineage"):
+        for key in ("prediction_store_manifest", "mlflow_artifact_uri", "prediction_replay_lineage"):
+            payload.pop(key, None)
+        if mode == PREPARED_ABSOLUTE_TARGET_MODE:
+            # The account uses frozen targets. It has no prediction producer,
+            # and any recorder supplied by the account remains its own.
+            payload.pop("prediction_replay_source_ref", None)
+            payload["prepared_workspace_asset_resolution"] = "not_applicable"
+            return payload, {"status": "not_applicable", "errors": []}
+        for key in ("recorder_id", "recorder_experiment_id"):
             payload.pop(key, None)
 
         def exact_manifest(task_id, index, runner_mode):

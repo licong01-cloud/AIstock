@@ -30,6 +30,7 @@ from .qe_batch_execution_policy import (
 )
 from .qe_execution_reservation import (
     ACTIVE_RESERVATION_STATUSES,
+    PREPARED_ABSOLUTE_TARGET_MODE,
     CapacityWaitRecorder,
     QEExecutionCapacityObservation,
     QEExecutionReservationAcquireResult,
@@ -61,7 +62,6 @@ WSL_BACKTEST_DEFAULT_CAPACITY = 2
 WSL_BACKTEST_HARD_CAPACITY = MAX_QE_NODE_PARALLELISM
 WSL_PARALLEL_TRAINING_HARD_CAPACITY = 2
 REMOTE_HARD_CAPACITY = 4
-PREPARED_ABSOLUTE_TARGET_MODE = "ABSOLUTE_TARGET_REPLAY"
 
 # The coordinator starts immediately and performs a safety sweep at most every
 # 60 seconds.  Keeping durable execution leases below that bound guarantees a
