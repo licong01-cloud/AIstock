@@ -32,16 +32,26 @@
   ],
   "expected": "Register the exact prepared Loop and archive it without requiring a prediction producer. Reject other unsupported workload modes and mismatched task and Loop identity.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/qe_archive/archive_service.py",
+      "backend/services/quantevolver/qe_active_execution_capacity.py",
+      "backend/services/quantevolver/qe_execution_reservation.py",
+      "backend/services/quantevolver/qe_run_registry.py",
+      "backend/tests/qe_archive/test_round3_fixes.py",
+      "backend/tests/quantevolver/test_qe_prepared_workspace_batch.py",
+      "tests/aistock_validation/bugs/20261125_BUG-2287-qe-prepared-absolute-target-replay-cannot-register-its-workspace-loop.json"
+    ],
     "added_files": [],
     "changed_files": [
-      "backend/services/quantevolver/qe_execution_reservation.py",
-      "backend/services/quantevolver/qe_active_execution_capacity.py",
-      "backend/services/quantevolver/qe_run_registry.py",
       "backend/services/qe_archive/archive_service.py",
+      "backend/services/quantevolver/qe_active_execution_capacity.py",
+      "backend/services/quantevolver/qe_execution_reservation.py",
+      "backend/services/quantevolver/qe_run_registry.py",
+      "backend/tests/qe_archive/test_round3_fixes.py",
       "backend/tests/quantevolver/test_qe_prepared_workspace_batch.py",
-      "backend/tests/qe_archive/test_round3_fixes.py"
+      "tests/aistock_validation/bugs/20261125_BUG-2287-qe-prepared-absolute-target-replay-cannot-register-its-workspace-loop.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/quantevolver/qe_execution_reservation.py",
@@ -194,12 +204,16 @@
       "A fresh process loaded the changed registration and archive services from the task worktree. It consumed the exact 31-file pre-reviewed canonical packages for b88bd728/Loop1 and 9f9666c8/Loop2, checked the live WSL dataset binding, two replay slots, frozen input hashes, and absent native Loops, reserved both in a captured SQL transaction, and ran the real terminal archive assembler in dry-run mode. Both registration and archive preserved their exact Loop index. No database write or worker launch. Receipt SHA256 07c0edfbb71d52d7ee01548eb457b946af7469c46a25f6c270035102c2edb504."
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
     "post_restart_note": "Verify the approved backend-main merge identity and policy endpoint after the user's reload. Reconcile the two original Loop IDs and confirm independent native worker start, exact replay cohort, and completion receipt on the existing R1111 accounts.",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
