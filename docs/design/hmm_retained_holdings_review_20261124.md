@@ -25,6 +25,20 @@ python scripts/hmm_risk/review_planned_additions.py --days days.parquet --stocks
 - 每股新增需求为原权重乘净值再减该股总持仓市值，负数取零，各股按分汇总。行业并列时优先预计留存本金较大者，再按行业代码。同业第一只复核股票按新增需求、股票代码排序。输出包括行业预计新增总额、占净值比例、其中新开仓和已有持仓补买金额，以及第一只股票的需求。实际可成交本金还取决于现金、整手和执行约束。
 - 缺目标行、缺持股市值、正需求股票行业不明分别标记 `INCOMPLETE_TARGETS`、`UNKNOWN_TARGET_HOLDINGS`、`UNKNOWN_TARGET_INDUSTRY`，对应金额留空。所有留存行业均无新增需求时，`incoming` 行标记 `NO_PLANNED_ADDITION`、需求为零。原旧仓和原目标状态沿用前述入口。冻结的 M0、M1 在行业选定后匹配，两列可分别缺失。
 
+## 核对同一笔现金能否改变买单顺序
+
+历史执行复核使用下面两个离线入口。第一个从同一账户同一分钟的已归档原买单找出两种现金互斥的选择；第二个核对改买以后，原策略要求清仓时应卖多少股。复核者须提供原执行顺序、整手、原始价格、累计费用与当时现金。交易后形成的成交回执用于历史验证。
+
+```sh
+python -m scripts.hmm_risk.review_competing_buys --tickets tickets.parquet --scores reconstructed.parquet --output choices.csv
+python -m scripts.hmm_risk.review_competing_exits --bars exit_bars.parquet --output exit_sizes.csv
+```
+
+- `tickets` 按 `account,tick,stock` 唯一，使用上海本地时钟。`date` 为更早的决策日，`code,rank` 来自该日的行业和原股排名。`sequence` 为先卖后买账本下同分钟买单的实际顺序。`filled,attempted,remaining_before` 为真实成交、可证明的原尝试量及原母单当时剩余股数。`cash_limited` 只在实际因资金缩量时为真，`exact_attempt` 为假表示只知道尝试量的下界。`price_cents,prior_notional_cents,cash_end_cents` 单位为分，分别为原始每股价格、本订单本次之前的累计成交金额、保护其他原成交后的分钟结余。调用方提供同一时点所有获资买单与可定位的受限买单，并独立覆盖未定位记录。原费率为买入万分之 0.95、每张累计最低 5 元。
+- `status` 描述是否可以从先获资的其他行业撤下一个能够独立买卖的最小单位，转给受限行业。分别核对两只股票的交易单位、原单剩余量和边际费用。`whole_status` 描述两个原尝试子单是否各自都能买足、合在一起又超出现金。只有在原排序能逐股复现原成交时，才输出反向优先后的两只股数；剩余现金继续用于先获资的原股。两项各自的 `first_daily`、`whole_first_daily` 标出每账户日最早可核实的一个选择，同刻按原获资顺序再按受限股票代码。多个可替代配对往往使用同一笔现金。
+- 可选 `scores` 以 `date,effective,code,score` 对齐。较高的冻结行业分才换序，同分保留，缺分标 `UNKNOWN` 并在账户比较中沿用原顺序。正式与历史重构分应分别运行。原股排名的对照也保留未知值。
+- 清仓复核使用 `account,order,tick,stock,target_quantity,original_open,revised_open,split_count,sellable_bar,volume_shares,original_sold`。逐笔原时钟、是否可卖及原始成交量均来自同一归档，开盘股数已核对 T+1。只处理原目标明确为零的三段 TWAP。还原原卖量后，用修订持仓在相同分钟重算；增加的卖量须位于原成交分钟，增量上限取该分钟成交量的 1%。缺原单一致性或容量时输出具体状态，建议股数为空。整个账户的现金和净值需继续按原流水检验。
+
 ## 设计验收索引与验证
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
@@ -33,6 +47,8 @@ python scripts/hmm_risk/review_planned_additions.py --days days.parquet --stocks
 | F-002 | 同一入口校验持仓完整性、保留逐日状态并按决策日及生效日匹配可选预警 | `backend/tests/hmm_risk/test_review_retained_holdings.py`，396 个原账户日逐一覆盖 | PASS | 无 |
 | F-003 | `scripts/hmm_risk/review_planned_additions.py` 的 `planned_reviews` 计算两种复核选择，返回逐股与行业的正需求和资金来源拆分 | `backend/tests/hmm_risk/test_review_planned_additions.py`，两本原账 396 天次产生 792 行，与原始目标、持仓及次日成交对照 | PASS | 无 |
 | F-004 | 同一入口校验原目标行数、账户日期、市值、行业、预警和空选择，支持本地文件和标准输出 | `backend/tests/hmm_risk/test_review_planned_additions.py` 覆盖不完整目标、无新增、错误行与输出一致性；此前 396 行旧仓清单逐字节一致 | PASS | 无 |
+| F-005 | `scripts/hmm_risk/review_competing_buys.py` 比较受限买单与原获资者，保留其他成交、原排序、缺分、两种单位及每日本金去重 | `backend/tests/hmm_risk/test_review_competing_buys.py`，396 个历史账户日中确认 5 个最小单位配对及 51 个完整子单配对，日内共享资金 | PASS | 无 |
+| F-006 | `scripts/hmm_risk/review_competing_exits.py` 用同一清仓目标、原始时钟和成交量核对原卖量与修订股数 | `backend/tests/hmm_risk/test_review_competing_buys.py`，四张已完成清仓母单共 12 个原成交分钟与独立逐笔核算一致 | PASS | 无 |
 
 ## 生产门禁与适用方式
 
