@@ -860,6 +860,50 @@ class AdjFactorHistoryReconciler:
             }
         )
 
+    def repair_verified_prefix(
+        self, *, symbol: str, dates: Sequence[dt.date], end_date: dt.date, dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """Insert only named source rows before an exactly matching local history.
+
+        The caller owns the standard adj-factor writer lock for an apply. The
+        older, unavailable listing prefix is outside this operation's receipt.
+        """
+        requested = tuple(sorted(set(dates)))
+        if not requested or requested[-1] > end_date:
+            raise ValueError("factor prefix repair requires dated keys within the history cutoff")
+        provider = self._stable_provider_snapshot(SymbolScope(symbol, requested[0]), end_date=end_date)
+        local = self.repository.load_snapshot(symbol, end_date=end_date)
+        local_values = {row.trade_date: row.value for row in local.rows}
+        source_rows = {row.trade_date: row for row in provider.rows}
+        if not set(requested) <= source_rows.keys():
+            raise AdjFactorHistoryReconcileError(f"{symbol}: provider lacks a requested prefix repair date")
+        overlap = [row for row in local.rows if row.trade_date >= provider.first_date]
+        if len(overlap) < 2 or any(row != source_rows.get(row.trade_date) for row in overlap):
+            raise AdjFactorHistoryReconcileError(f"{symbol}: prefix repair requires an exact local suffix")
+        additions = tuple(source_rows[day] for day in requested if day not in local_values)
+        if additions and additions[-1].trade_date >= local.first_date:
+            raise AdjFactorHistoryReconcileError(f"{symbol}: prefix repair found an interior or trailing gap")
+        written = 0
+        if additions and not dry_run:
+            self.repository.begin_stage()
+            self.repository.stage_rows(additions)
+            written = self.repository.apply_staged(
+                symbols=(symbol,), replace_symbols=(), end_date=end_date,
+                expected_local_sha256={symbol: local.canonical_sha256},
+                expected_row_counts={symbol: len(additions)},
+            )
+        return {
+            "schema_version": "adj_factor_verified_prefix_repair_v1",
+            "status": "dry_run" if dry_run else "reconciled" if written else "unchanged",
+            "source_api": SOURCE_API, "symbol": symbol, "history_cutoff": end_date.isoformat(),
+            "source_first_date": provider.first_date.isoformat(),
+            "source_sha256": provider.canonical_sha256, "prior_local_sha256": local.canonical_sha256,
+            "matched_local_rows": len(overlap),
+            "requested_dates": [day.isoformat() for day in requested],
+            "addition_dates": [row.trade_date.isoformat() for row in additions],
+            "written_row_count": written,
+        }
+
     def reconcile(
         self, *, end_date: dt.date, symbols: Sequence[str] | None = None,
         scope_date: dt.date | None = None,

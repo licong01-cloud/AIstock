@@ -389,6 +389,31 @@ def test_disjoint_counts_and_no_unknown_to_zero():
         ValidationResult(PartitionState.VALID, (), {})
 
 
+@pytest.mark.parametrize("code,day", [
+    ("000787.SZ", date(2008, 9, 25)),
+    ("000805.SZ", date(2009, 12, 31)),
+    ("600680.SH", date(2018, 10, 10)),
+])
+def test_dated_adj_factor_suspension_requires_disclosure_and_yields_to_trades(monkeypatch, code, day):
+    from backend.services.data_integrity import validation
+    from backend.data_service.security_source_identity import load_default_security_source_identity_manifest
+
+    authority = load_default_security_source_identity_manifest()
+    monkeypatch.setattr(validation, "rows", lambda *_: [])
+    evidence = validation.adj_factor_suspension_evidence(object(), day, {code, "000001.SZ"}, authority)
+    assert set(evidence) == {code}
+    assert validation.adj_factor_suspension_evidence(object(), date(2026, 11, 25), {code}, authority) == {}
+    result = validation.adj_factor_result({code, "000001.SZ"}, {"000001.SZ": {"adj_factor": 1}},
+                                         {"status": "PARTIAL", "failed_symbols": [code]},
+                                         suspension_evidence=evidence)
+    assert result.state.value == "VALID" and result.counts[0].legal_na == 1 and result.gaps == ()
+    invalid = validation.adj_factor_result({code}, {code: {"adj_factor": 0}}, suspension_evidence=evidence)
+    assert invalid.state.value == "INCOMPLETE" and invalid.counts[0].invalid == 1
+    alias = authority.resolve(code, day, "market.kline_daily_raw").source_ts_code
+    monkeypatch.setattr(validation, "rows", lambda *_: [{"ts_code": alias}])
+    assert validation.adj_factor_suspension_evidence(object(), day, {code}, authority) == {}
+
+
 @pytest.mark.parametrize("state,failed,expected", [
     ("COMPLETE", [], PartitionState.VALID),
     ("PARTIAL", ["300506.SZ"], PartitionState.INCOMPLETE),

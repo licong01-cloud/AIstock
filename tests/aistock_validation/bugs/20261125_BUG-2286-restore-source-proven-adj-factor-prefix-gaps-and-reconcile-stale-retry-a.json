@@ -1,11 +1,13 @@
 {
-  "actual": "309 historical dates remain missing despite available exact source; 309 retry targets still show exhausted alarms.",
+  "actual": "309 historical dates remain missing despite available exact source; 309 retry targets still show exhausted alarms. Exchange disclosures substantiate 675 alerted security-days inside explicit listing suspension intervals; absent rows were required despite no positive trade evidence.",
   "allowed_write_scope": [
     "backend/services/adj_factor_history_reconciler.py",
     "backend/tests/services/test_adj_factor_history_reconciler.py",
     "backend/ingestion/tdx_scheduler.py",
     "backend/tests/ingestion/test_tdx_scheduler_adj_factor.py",
-    "tests/aistock_validation/bugs/20261125_BUG-2286-restore-source-proven-adj-factor-prefix-gaps-and-reconcile-stale-retry-a.json"
+    "tests/aistock_validation/bugs/20261125_BUG-2286-restore-source-proven-adj-factor-prefix-gaps-and-reconcile-stale-retry-a.json",
+    "backend/services/data_integrity/validation.py",
+    "backend/tests/test_daily_data_integrity.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2286",
@@ -26,16 +28,28 @@
     }
   ],
   "evidence_uris": [],
-  "expected": "Exact verified dates can be backfilled without changing existing factors or representing unavailable history as complete; queued work remains visible with its real status.",
+  "expected": "Exact verified dates can be backfilled without changing existing factors or representing unavailable history as complete; queued work remains visible with its real status. Certified listing suspensions are counted as legal absent only for the exact dated identities without contrary positive trades.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261125_BUG-2286-restore-source-proven-adj-factor-prefix-gaps-and-reconcile-stale-retry-a.json",
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/services/adj_factor_history_reconciler.py",
+      "backend/services/data_integrity/validation.py",
+      "backend/tests/ingestion/test_tdx_scheduler_adj_factor.py",
+      "backend/tests/services/test_adj_factor_history_reconciler.py",
+      "backend/tests/test_daily_data_integrity.py"
+    ],
     "added_files": [],
     "changed_files": [
-      "backend/services/adj_factor_history_reconciler.py",
-      "backend/tests/services/test_adj_factor_history_reconciler.py",
+      "tests/aistock_validation/bugs/20261125_BUG-2286-restore-source-proven-adj-factor-prefix-gaps-and-reconcile-stale-retry-a.json",
       "backend/ingestion/tdx_scheduler.py",
-      "backend/tests/ingestion/test_tdx_scheduler_adj_factor.py"
+      "backend/services/adj_factor_history_reconciler.py",
+      "backend/services/data_integrity/validation.py",
+      "backend/tests/ingestion/test_tdx_scheduler_adj_factor.py",
+      "backend/tests/services/test_adj_factor_history_reconciler.py",
+      "backend/tests/test_daily_data_integrity.py"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/adj_factor_history_reconciler.py",
@@ -147,11 +161,23 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_contract_id": "local_data_freshness",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "database_readback_ref": "http://127.0.0.1:8001/api/v1/local-data/integrity/days/2009-12-31",
+    "fresh_process_evidence": [
+      "Fresh Windows Python loaded the implementation. Native production read-only prefix rehearsal proved 309 exact keys and 3476 identical local suffix rows; historical physical validation classified listing suspensions and preserved a real 000005.SZ gap; scheduler candidate query read back 43 reopened targets. Existing DEV native PostgreSQL insert and rollback, original factors preserved, idempotent repeat zero."
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",

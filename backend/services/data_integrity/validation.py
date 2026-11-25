@@ -87,14 +87,49 @@ def index_quote_result(expected, facts, *, session=None, trade_date=None):
         else PartitionState.INCOMPLETE, base.counts+(optional,), base.checks, tuple(gaps))
 
 
-def adj_factor_result(expected, facts, history=None):
+# Listing suspensions established by dated exchange disclosures.
+_ADJ_FACTOR_LISTING_SUSPENSIONS = {
+    "000787.SZ": (date(2007, 5, 24), date(2012, 6, 5),
+                  "https://static.cninfo.com.cn/finalpage/2012-06-05/61088317.PDF"),
+    "000805.SZ": (date(2006, 5, 15), date(2013, 3, 26),
+                  "https://static.cninfo.com.cn/finalpage/2014-08-27/1200173785.PDF"),
+    "600680.SH": (date(2018, 5, 29), date(2019, 5, 22),
+                  "https://static.sse.com.cn/disclosure/bond/announcement/company/c/3263935229109488.pdf"),
+}
+
+
+def adj_factor_suspension_evidence(conn, day, absent, authority):
+    candidates = {code: url for code, (start, end, url) in _ADJ_FACTOR_LISTING_SUSPENSIONS.items()
+                  if code in absent and start <= day <= end}
+    if not candidates:
+        return {}
+    aliases = {code: authority.resolve(code, day, "market.kline_daily_raw").source_ts_code
+               for code in candidates}
+    positive = {str(row["ts_code"]).strip() for row in rows(conn,
+        """SELECT DISTINCT ts_code FROM market.kline_daily_raw WHERE trade_date=%s AND ts_code=ANY(%s)
+           AND (volume_hand>0 OR volume_shares>0 OR amount_li>0)""",
+        (day, sorted(set(candidates) | set(aliases.values()))))}
+    return {code: url for code, url in candidates.items() if not {code, aliases[code]} & positive}
+
+
+def adj_factor_result(expected, facts, history=None, *, suspension_evidence=None):
     """A finite latest value cannot certify a known unresolved factor baseline."""
     result = key_result(expected, facts, required_fields=("adj_factor",), positive_fields=("adj_factor",))
+    suspension_evidence = {code: url for code, url in (suspension_evidence or {}).items()
+                           if code in expected and code not in facts}
+    if suspension_evidence:
+        count = result.counts[0]
+        count = CheckCounts(count.unit, count.expected, count.valid, len(suspension_evidence),
+                            count.missing-len(suspension_evidence), count.invalid, count.unverified)
+        gaps = tuple({**gap, "symbols": sorted(set(gap["symbols"])-suspension_evidence.keys())}
+                     for gap in result.gaps if set(gap["symbols"])-suspension_evidence.keys())
+        result = ValidationResult(PartitionState.VALID if count.complete else PartitionState.INCOMPLETE,
+            (count,), {**result.checks, "listing_suspension_legal_na": suspension_evidence}, gaps)
     history = history or {}
     state = history.get("status")
     if state in {"RUNNING", "INTERRUPTED"}:
         return unverified("adj_factor_history_not_completed", physical_rows=len(facts), history_status=state)
-    blocked = set(history.get("failed_symbols", ())) & set(expected)
+    blocked = (set(history.get("failed_symbols", ())) & set(expected)) - suspension_evidence.keys()
     if state == "PARTIAL" and blocked:
         return ValidationResult(PartitionState.INCOMPLETE, result.counts + (
             CheckCounts("history_baseline", len(blocked), 0, 0, 0, len(blocked), 0),),
@@ -329,7 +364,8 @@ class PhysicalValidator:
                 FROM market.dataset_date_refresh_audit WHERE dataset='adj_factor'
                   AND trade_date=%s AND data_source='canonical_db'""", (day,))
             history = history_rows[0].get("history") if history_rows else None
-            return adj_factor_result(expected, facts, history)
+            evidence = adj_factor_suspension_evidence(conn, day, set(expected)-facts.keys(), authority)
+            return adj_factor_result(expected, facts, history, suspension_evidence=evidence)
         if dataset == "index_daily":
             # index_basic is a request catalogue (including nonquoted variants),
             # not a dated publication authority. Never turn it into fake gaps.

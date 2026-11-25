@@ -18,6 +18,36 @@ from backend.ingestion.tdx_scheduler import TDXScheduler
 from backend.services.data_integrity.listing_scope import listing_change_window
 
 
+@pytest.mark.parametrize("still_retrying", [True, False])
+def test_reopened_factor_alarm_is_replaced_only_when_pending_repair_is_current(monkeypatch, still_retrying):
+    import backend.ingestion.tdx_scheduler as scheduling
+
+    scheduler = object.__new__(TDXScheduler)
+    scheduler._db_cfg = {}
+    scheduler._fetchall = Mock(return_value=[{
+        "partition": None, "recovery_target_ids": ["dated-factor-repair"] if still_retrying else [],
+    }])
+    scheduler._execute = Mock()
+    notifier = Mock()
+    notifier.flush.return_value = {"inserted": 1}
+    monkeypatch.setattr(scheduling, "DataHealthAlerter", lambda _cfg: notifier)
+    scheduler._flush_final_data_sync_alerts([{
+        "dataset": "adj_factor", "data_source": "integrity_repair", "target_status": "retry",
+        "target_date": dt.date(2009, 12, 31), "target_id": "dated-factor-repair",
+        "failure_category": "physical_gap",
+    }])
+
+    assert scheduler._fetchall.call_args.args[1][-2] is True
+    if still_retrying:
+        alert = notifier.flush.call_args.args[0][0]
+        assert (alert.alert_type, alert.severity, alert.details["retry_result"]) == ("gap", "warning", "pending")
+        assert alert.details["recovery_target_ids"] == ["dated-factor-repair"]
+        scheduler._execute.assert_called_once()
+    else:
+        notifier.flush.assert_not_called()
+        scheduler._execute.assert_not_called()
+
+
 def test_known_history_conflict_cannot_be_reconciled_by_permissive_freshness(monkeypatch):
     import backend.ingestion.tdx_scheduler as scheduler_module
     scheduler = object.__new__(TDXScheduler)
