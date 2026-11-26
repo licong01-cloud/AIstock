@@ -42,8 +42,8 @@ class DailyIntegrityWorker:
                   AND p.trade_date=t.target_date AND p.data_source='canonical_db'
                 WHERE t.data_source='canonical_db' AND t.target_scope->>'operation'='VALIDATE_ONLY'
                   AND t.dataset=ANY(%s::text[]) AND t.target_date<=%s
+                  AND t.target_status IN ('pending','retry') AND t.next_retry_at>clock_timestamp()
                   AND p.validation_status='UNVERIFIED'
-                  AND ((t.target_status IN ('pending','retry') AND t.next_retry_at>clock_timestamp()
                   AND (p.metadata#>>'{validation,reason}'='non_daily_dataset_contract'
                     OR (p.dataset=ANY(%s::text[])
                       AND p.metadata#>>'{validation,reason}'='complete_current_event_query_required'
@@ -51,18 +51,7 @@ class DailyIntegrityWorker:
                         WHERE f.dataset=t.dataset AND f.target_date=t.target_date
                           AND f.data_source IN ('tushare','integrity_repair')
                           AND COALESCE(f.target_scope->>'operation','FETCH')<>'VALIDATE_ONLY'
-                          AND f.target_status IN ('pending','retry')))))
-                    OR (t.target_status='final_blocked' AND p.dataset='adj_factor'
-                      AND p.metadata#>>'{validation,reason}'='adj_factor_history_evidence_pending'
-                      AND EXISTS (
-                        SELECT 1 FROM market.dataset_date_refresh_audit q
-                        WHERE q.dataset IN ('kline_daily_raw','suspend_d')
-                          AND q.trade_date=p.trade_date AND q.data_source='canonical_db'
-                          AND q.data_revision::text IS DISTINCT FROM
-                            (p.metadata->'validation'->'checks'->>
-                              CASE WHEN q.dataset='kline_daily_raw' THEN 'adj_factor_raw_revision'
-                                   ELSE 'adj_factor_suspend_revision' END)
-                      )))
+                          AND f.target_status IN ('pending','retry'))))
                   AND p.data_revision=(t.metadata->>'desired_revision')::bigint
                   AND (t.metadata->>'lease_until' IS NULL
                        OR (t.metadata->>'lease_until')::timestamptz<=clock_timestamp())
@@ -222,14 +211,12 @@ class DailyIntegrityWorker:
         with self.repository.transaction() as conn:
             if revision is not None:
                 with conn.cursor() as cur:
-                    cur.execute("""SELECT data_revision,validation_status,validation_id FROM market.dataset_date_refresh_audit
+                    cur.execute("""SELECT data_revision,validation_status FROM market.dataset_date_refresh_audit
                         WHERE dataset=%s AND trade_date=%s AND data_source='canonical_db' FOR UPDATE""",
                         (obligation.dataset, day))
                     row = cur.fetchone()
                 if not row or row[0] != revision or row[1] not in {"INCOMPLETE", "WAIT_UPSTREAM", "UNVERIFIED"}:
                     return  # a later writer/verifier already moved this partition
-                if obligation.dataset == "adj_factor":
-                    record.metadata["adj_factor_validation_id"] = row[2]
             DataSyncTargetRepository().upsert_target(record, conn=conn)
 
     def rebuild_day(self, day: date):

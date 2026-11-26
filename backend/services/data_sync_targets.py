@@ -154,16 +154,26 @@ class DataSyncTargetRepository:
                     = EXCLUDED.metadata->>'adj_factor_validation_id', FALSE))
             RETURNING *
         """
+        factor_repair = (record.dataset == "adj_factor" and record.data_source == "integrity_repair"
+                         and target_scope.get("operation") == "FETCH")
         with (self._connection_provider() if conn is None else nullcontext(conn)) as conn:
             with conn.cursor() as cur:
+                if factor_repair and not row["metadata"].get("adj_factor_validation_id"):
+                    cur.execute("""SELECT validation_id FROM market.dataset_date_refresh_audit
+                        WHERE dataset='adj_factor' AND trade_date=%s AND data_source='canonical_db'
+                          AND data_revision=validated_revision""", (record.target_date,))
+                    proof = cur.fetchone()
+                    if proof and proof[0]:
+                        row["metadata"]["adj_factor_validation_id"] = proof[0]
                 cur.execute(sql, [self._adapt(column, row[column]) for column in columns])
-                written = self._rows(cur)
-                if written:
-                    return written[0]
-                # The conflict guard preserves an existing target at the same proof.
-                cur.execute("""SELECT * FROM market.data_sync_targets
-                    WHERE dataset=%s AND data_source=%s AND target_key_sha256=%s""",
-                    (record.dataset, record.data_source, target_key_sha256))
+                if factor_repair:
+                    written = self._rows(cur)
+                    if written:
+                        return written[0]
+                    # The conflict guard preserves an existing target at the same proof.
+                    cur.execute("""SELECT * FROM market.data_sync_targets
+                        WHERE dataset=%s AND data_source=%s AND target_key_sha256=%s""",
+                        (record.dataset, record.data_source, target_key_sha256))
                 return self._row(cur)
 
     def park_adj_factor_repair(self, target_id: str, *, validation_id: str | None, reason: str) -> bool:

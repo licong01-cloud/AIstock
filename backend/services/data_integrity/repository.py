@@ -140,6 +140,34 @@ class IntegrityRepository:
                 (dataset,trade_date,data_source,status,row_count,quality_status)
                 VALUES (%s,%s,'canonical_db','failed',0,'unproven') ON CONFLICT DO NOTHING""", (dataset, day))
 
+    @staticmethod
+    def wake_adj_factor_history(conn, *, limit: int = 10) -> list[dict[str, Any]]:
+        """Wake previously parked validations only after dated evidence changes."""
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("""WITH changed AS (
+                SELECT t.target_id FROM market.data_sync_targets t
+                JOIN market.dataset_date_refresh_audit p ON p.dataset=t.dataset
+                  AND p.trade_date=t.target_date AND p.data_source='canonical_db'
+                WHERE t.dataset='adj_factor' AND t.data_source='canonical_db'
+                  AND t.target_scope->>'operation'='VALIDATE_ONLY' AND t.target_status='final_blocked'
+                  AND p.validation_status='UNVERIFIED'
+                  AND p.metadata#>>'{validation,reason}'='adj_factor_history_evidence_pending'
+                  AND p.data_revision=(t.metadata->>'desired_revision')::bigint
+                  AND EXISTS (
+                    SELECT 1 FROM market.dataset_date_refresh_audit q
+                    WHERE q.dataset IN ('kline_daily_raw','suspend_d')
+                      AND q.trade_date=p.trade_date AND q.data_source='canonical_db'
+                      AND q.data_revision::text IS DISTINCT FROM
+                        (p.metadata->'validation'->'checks'->>
+                          CASE WHEN q.dataset='kline_daily_raw' THEN 'adj_factor_raw_revision'
+                               ELSE 'adj_factor_suspend_revision' END)
+                  )
+                ORDER BY t.target_date DESC,t.target_id LIMIT %s FOR UPDATE OF t SKIP LOCKED
+            ) UPDATE market.data_sync_targets t SET target_status='pending',
+                next_retry_at=clock_timestamp(),updated_at=clock_timestamp()
+              FROM changed WHERE t.target_id=changed.target_id RETURNING t.target_date""", (limit,))
+            return [dict(row) for row in cur.fetchall()]
+
     def claim(self, dataset: str, day: date, *, lease_seconds: int = 300) -> dict[str, Any] | None:
         if not 10 <= lease_seconds <= 1800:
             raise ValueError("validation lease must be bounded")

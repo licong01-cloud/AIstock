@@ -1071,9 +1071,17 @@ class TDXScheduler:
 
     @staticmethod
     def _run_daily_integrity():
+        from backend.services.data_integrity.repository import IntegrityRepository, schema_installed
         from backend.services.data_integrity.worker import DailyIntegrityWorker
         try:
-            return DailyIntegrityWorker().run_once()
+            repository = IntegrityRepository()
+            try:
+                with repository.transaction() as conn:
+                    if schema_installed(conn):
+                        repository.wake_adj_factor_history(conn)
+            except Exception:
+                _logger.exception("adj_factor history wakeup failed")
+            return DailyIntegrityWorker(repository=repository).run_once()
         except Exception:
             _logger.exception("daily integrity maintenance unavailable; existing collection continues")
             return {"status": "ERROR"}
