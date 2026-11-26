@@ -33,19 +33,28 @@
   "evidence_uris": [],
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
-      "scripts/ingest_tushare_adj_factor.py",
+    "actual_changed_files": [
       "backend/ingestion/tdx_scheduler.py",
-      "backend/services/data_integrity/validation.py",
       "backend/services/data_integrity/repository.py",
+      "backend/services/data_integrity/validation.py",
       "backend/services/data_sync_targets.py",
       "backend/tests/ingestion/test_tdx_scheduler_adj_factor.py",
       "backend/tests/test_daily_data_integrity.py",
-      "backend/tests/scripts/test_daily_integrity_writers.py",
-      "backend/services/data_integrity/worker.py"
+      "scripts/ingest_tushare_adj_factor.py",
+      "tests/aistock_validation/bugs/20261126_BUG-2290-issue.json"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/services/data_integrity/repository.py",
+      "backend/services/data_integrity/validation.py",
+      "backend/services/data_sync_targets.py",
+      "backend/tests/ingestion/test_tdx_scheduler_adj_factor.py",
+      "backend/tests/test_daily_data_integrity.py",
+      "scripts/ingest_tushare_adj_factor.py",
+      "tests/aistock_validation/bugs/20261126_BUG-2290-issue.json"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "scripts/ingest_tushare_adj_factor.py",
@@ -219,14 +228,20 @@
     "business_smoke_contract_id": "local_data_freshness",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
     "database_readback_ref": "http://127.0.0.1:8001/api/v1/local-data/integrity/days/2026-11-26",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "Fresh isolated Python from a628a6b4e loaded the scheduler, canonical validator and target repository. Production read-only replay verified 2026-11-26 VALID 5224/5224 and four aged phantom-gap partitions UNVERIFIED, with actual identifiers preserved. Existing aistock_dev rolled-back transaction verified evidence parking, raw revision wakeup, stale proof rejection, repeated identical proof preserving the parked target, and new proof reopening it."
+    ],
     "health_ref": "http://127.0.0.1:8001/api/v1/health",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
