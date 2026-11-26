@@ -68,6 +68,31 @@ def test_known_history_conflict_cannot_be_reconciled_by_permissive_freshness(mon
     scheduler._check_dataset_recovered.assert_not_called()
 
 
+def test_unchanged_old_factor_repair_waits_for_new_dated_proof(monkeypatch):
+    import backend.ingestion.tdx_scheduler as scheduling
+
+    scheduler = object.__new__(TDXScheduler)
+    repo = Mock()
+    monkeypatch.setattr(scheduling, "DataSyncTargetRepository", lambda: repo)
+    scheduler._target_date_for_retry = lambda *_: dt.date(2014, 12, 2)
+    scheduler._job_update_outcome = lambda _job: {"status": "success", "history_reconciliation": {
+        "status": "unchanged", "written_row_count": 0, "completed_symbols": ["601268.SH"],
+    }}
+    scheduler._check_dataset_recovered = Mock(return_value=SimpleNamespace(status="gap"))
+    scheduler._reconcile_recovered_target_state = Mock()
+    done = Future()
+    done.set_result(None)
+
+    scheduler._finalize_data_sync_target_retry(done, target_id="target", dataset="adj_factor",
+        mode="incremental", options={"job_id": "c197fd66-9de8-4e0c-a994-f774a42a89e7",
+            "integrity_repair": True, "adj_factor_validation_id": "div_exact"})
+
+    repo.park_adj_factor_repair.assert_called_once_with("target", reason="adj_factor_history_source_unchanged",
+                                                       validation_id="div_exact")
+    repo.mark_retry.assert_not_called()
+    scheduler._reconcile_recovered_target_state.assert_not_called()
+
+
 @pytest.mark.parametrize("records", [[],
     [{"ts_code": "300506.SZ", "trade_date": "20261026", "adj_factor": 1}],
     [{"ts_code": "300506.SZ", "trade_date": "20261027", "adj_factor": float("nan")}],
@@ -110,7 +135,7 @@ def test_exact_factor_repair_uses_only_current_named_supported_gaps(classificati
         queries.append((query, params))
         if "unnest" in query:
             return [
-                {"ts_code": "000001.SZ", "collectable": True, "retired_on_date": False},
+                {"ts_code": "000001.SZ", "collectable": True, "retired_on_date": False, "traded_on_date": True},
                 {"ts_code": "600001.SH", "collectable": True, "retired_on_date": True},
             ]
         return [{"data_revision": 3, "validated_revision": 3, "validation_status": "INCOMPLETE",
@@ -135,17 +160,28 @@ def test_factor_gap_without_local_history_is_deferred_without_launching_a_failin
     monkeypatch.setattr(scheduling, "_now", lambda: now)
     verdict = {"data_revision": 1, "validated_revision": 1, "validation_status": "INCOMPLETE",
                "validation": {"gaps": [{"classification": "MISSING", "symbols": ["000787.SZ"]}]}}
-    scheduler._fetchall = lambda query, params: [verdict] if "refresh_audit" in query else []
+    import backend.services.data_integrity.repository as integrity
+    conn = object()
+    enqueue = Mock()
+    monkeypatch.setattr(scheduling, "get_conn", lambda **_kwargs: nullcontext(conn))
+    monkeypatch.setattr(integrity, "enqueue_validation", enqueue)
+    verdict["validation_id"] = "div_previous"
+    scheduler._fetchall = Mock(side_effect=[
+        [verdict],
+        [{"ts_code": "000787.SZ", "collectable": True, "retired_on_date": False, "traded_on_date": False}],
+    ])
     target = {"target_id": "old-gap", "target_date": day}
     assert scheduler._scope_adj_factor_repair(target) is False
-    repo.mark_retry.assert_called_once()
-    assert repo.mark_retry.call_args.kwargs["retry_after"] == now + dt.timedelta(days=1)
-    assert repo.mark_retry.call_args.kwargs["context"]["missing_symbols"] == ["000787.SZ"]
+    enqueue.assert_called_once_with(conn, "adj_factor", day, source_completed=True)
+    repo.park_adj_factor_repair.assert_called_once_with("old-gap", reason="adj_factor_history_evidence_pending",
+                                                       validation_id="div_previous")
+    repo.mark_retry.assert_not_called()
 
 
 def test_first_listing_factor_gap_is_fetchable_without_local_prices(monkeypatch):
     import backend.ingestion.tdx_scheduler as scheduling
     monkeypatch.setattr(scheduling, 'DataSyncTargetRepository', Mock)
+    monkeypatch.setattr(scheduling, "_now", lambda: dt.datetime(2026, 11, 11, tzinfo=dt.timezone.utc))
     scheduler = object.__new__(TDXScheduler)
     queries = []
 
@@ -449,9 +485,11 @@ def test_incremental_adj_factor_scheduler_passes_optional_history_controls() -> 
     assert "--history-reconcile-dry-run" in args
 
 
-@pytest.mark.parametrize("history_error", [False, True])
+@pytest.mark.parametrize(("history_error", "daily_verdict"), [
+    (False, None), (True, None), (False, "VALID"), (False, "INCOMPLETE"),
+])
 def test_incremental_script_uses_history_reconciliation_as_its_only_factor_write_path(
-    monkeypatch, history_error,
+    monkeypatch, history_error, daily_verdict,
 ) -> None:
     class _Connection:
         autocommit = False
@@ -495,6 +533,7 @@ def test_incremental_script_uses_history_reconciliation_as_its_only_factor_write
         history_reconcile_symbol=None,
         history_reconcile_dry_run=False,
         bulk_session_tune=False,
+        scheduled_daily=daily_verdict is not None,
     )
     monkeypatch.setattr(ingest_adj_factor, "parse_args", lambda: args)
     monkeypatch.setattr(ingest_adj_factor.psycopg2, "connect", lambda **kwargs: connection)
@@ -513,8 +552,12 @@ def test_incremental_script_uses_history_reconciliation_as_its_only_factor_write
         result = reconciler.reconcile(end_date=end_date)
         if history_error:
             raise RuntimeError("real history failure must remain failed")
+        if daily_verdict:
+            return {**result, "status": "partial", "failures": [{"symbol": "000787.SZ", "retryable": False}]}
         return result
     monkeypatch.setattr(ingest_adj_factor, "run_history_ingestion", run_history)
+    monkeypatch.setattr(ingest_adj_factor, "_scheduled_daily_partitions",
+        lambda *_args: [{"state": daily_verdict, "fact_date": "2026-09-14"}])
     monkeypatch.setattr(ingest_adj_factor, "PostgresAdjFactorHistoryRepository",
                         lambda _connection: SimpleNamespace(writer_lock=nullcontext))
     monkeypatch.setattr(
@@ -523,19 +566,23 @@ def test_incremental_script_uses_history_reconciliation_as_its_only_factor_write
         lambda *args, **kwargs: pytest.fail("incremental mode must not use the date-only upsert path"),
     )
 
-    if history_error:
+    should_fail = history_error or daily_verdict == "INCOMPLETE"
+    if should_fail:
         with pytest.raises(SystemExit) as error:
             ingest_adj_factor.main()
         assert error.value.code == 1
     else:
         ingest_adj_factor.main()
 
-    assert [name for name, _ in calls] == ["constructed", "reconciled", "finished"]
-    status, summary = calls[-1][1]
+    assert [name for name, _ in calls[:2]] == ["constructed", "reconciled"]
+    status, _summary = calls[-1][1]
     assert connection.closed is True
-    assert status == ("failed" if history_error else "success")
+    assert status == ("failed" if should_fail else "success")
     if not history_error:
-        assert summary["history_reconciliation"]["status"] == "unchanged"
+        receipt = calls[2][1][1]
+        assert receipt["history_reconciliation"]["status"] == ("partial" if daily_verdict else "unchanged")
+        if daily_verdict:
+            assert receipt["daily_partitions"][0]["state"] == daily_verdict
 
 
 @pytest.mark.parametrize('old,new,today,expected', [

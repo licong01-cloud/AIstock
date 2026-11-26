@@ -147,12 +147,56 @@ class DataSyncTargetRepository:
             ON CONFLICT (dataset, data_source, target_key_sha256) DO UPDATE SET
                 {assignments},
                 updated_at = NOW()
+            WHERE NOT (data_sync_targets.dataset='adj_factor'
+                AND data_sync_targets.data_source='integrity_repair'
+                AND data_sync_targets.target_status='final_blocked'
+                AND COALESCE(data_sync_targets.metadata->>'adj_factor_validation_id'
+                    = EXCLUDED.metadata->>'adj_factor_validation_id', FALSE))
             RETURNING *
         """
+        factor_repair = (record.dataset == "adj_factor" and record.data_source == "integrity_repair"
+                         and target_scope.get("operation") == "FETCH")
         with (self._connection_provider() if conn is None else nullcontext(conn)) as conn:
             with conn.cursor() as cur:
+                if factor_repair and not row["metadata"].get("adj_factor_validation_id"):
+                    cur.execute("""SELECT validation_id FROM market.dataset_date_refresh_audit
+                        WHERE dataset='adj_factor' AND trade_date=%s AND data_source='canonical_db'
+                          AND data_revision=validated_revision""", (record.target_date,))
+                    proof = cur.fetchone()
+                    if proof and proof[0]:
+                        row["metadata"]["adj_factor_validation_id"] = proof[0]
                 cur.execute(sql, [self._adapt(column, row[column]) for column in columns])
+                if factor_repair:
+                    written = self._rows(cur)
+                    if written:
+                        return written[0]
+                    # The conflict guard preserves an existing target at the same proof.
+                    cur.execute("""SELECT * FROM market.data_sync_targets
+                        WHERE dataset=%s AND data_source=%s AND target_key_sha256=%s""",
+                        (record.dataset, record.data_source, target_key_sha256))
                 return self._row(cur)
+
+    def park_adj_factor_repair(self, target_id: str, *, validation_id: str | None, reason: str) -> bool:
+        """End timed retries only while the exact dated validation is current."""
+        if not validation_id:
+            return False
+        with self._connection_provider() as conn, conn.cursor() as cur:
+            cur.execute("""WITH proof AS (
+                SELECT p.trade_date FROM market.dataset_date_refresh_audit p
+                JOIN market.data_sync_targets t ON t.target_date=p.trade_date
+                WHERE t.target_id=%s AND p.dataset='adj_factor' AND p.data_source='canonical_db'
+                  AND p.validation_id=%s AND p.data_revision=p.validated_revision
+                  AND p.validation_status IN ('INCOMPLETE','UNVERIFIED')
+                FOR SHARE OF p
+            )
+            UPDATE market.data_sync_targets t SET target_status='final_blocked',next_retry_at=NULL,
+                last_error_message=%s,blocked_at=clock_timestamp(),updated_at=clock_timestamp(),
+                metadata=t.metadata || jsonb_build_object('adj_factor_validation_id',%s::text,'failure_category',%s::text)
+            FROM proof WHERE t.target_id=%s AND t.target_date=proof.trade_date
+                AND t.dataset='adj_factor' AND t.data_source='integrity_repair'
+                AND t.target_status IN ('pending','retry')""",
+                (target_id, validation_id, reason, validation_id, reason, target_id))
+            return cur.rowcount == 1
 
     def get_target(self, target_id: str) -> dict[str, Any] | None:
         with self._connection_provider() as conn:

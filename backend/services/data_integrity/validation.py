@@ -15,7 +15,7 @@ from psycopg2.extras import RealDictCursor
 
 from backend.data_service.security_source_identity import load_default_security_source_identity_manifest
 from backend.services.tushare_dataset_specs import DATASET_REGISTRY
-from .catalog import Obligation
+from .catalog import CN, Obligation
 from .contracts import CheckCounts, PartitionState, ValidationResult, finite_number, effective_partition
 
 
@@ -99,8 +99,17 @@ _ADJ_FACTOR_LISTING_SUSPENSIONS = {
 
 
 def adj_factor_suspension_evidence(conn, day, absent, authority):
+    if not absent:
+        return {}
+    from backend.data_service.suspension_day_authority import full_day_keys, load_authority
+
     candidates = {code: url for code, (start, end, url) in _ADJ_FACTOR_LISTING_SUSPENSIONS.items()
                   if code in absent and start <= day <= end}
+    halts = rows(conn, """SELECT ts_code,trade_date,suspend_type,suspend_timing FROM market.suspend_d
+        WHERE trade_date=%s AND ts_code=ANY(%s)""", (day, sorted(absent)))
+    for code, _day in full_day_keys(halts, authority=load_authority(), required_dates=(day,)):
+        if code in absent:
+            candidates.setdefault(code, "market.suspend_d:FULL_DAY_SUSPENDED")
     if not candidates:
         return {}
     aliases = {code: authority.resolve(code, day, "market.kline_daily_raw").source_ts_code
@@ -109,10 +118,11 @@ def adj_factor_suspension_evidence(conn, day, absent, authority):
         """SELECT DISTINCT ts_code FROM market.kline_daily_raw WHERE trade_date=%s AND ts_code=ANY(%s)
            AND (volume_hand>0 OR volume_shares>0 OR amount_li>0)""",
         (day, sorted(set(candidates) | set(aliases.values()))))}
-    return {code: url for code, url in candidates.items() if not {code, aliases[code]} & positive}
+    return {code: evidence for code, evidence in candidates.items() if not {code, aliases[code]} & positive}
 
 
-def adj_factor_result(expected, facts, history=None, *, suspension_evidence=None):
+def adj_factor_result(expected, facts, history=None, *, suspension_evidence=None,
+                      historical_traded=None, raw_revision=None, suspend_revision=None):
     """A finite latest value cannot certify a known unresolved factor baseline."""
     result = key_result(expected, facts, required_fields=("adj_factor",), positive_fields=("adj_factor",))
     suspension_evidence = {code: url for code, url in (suspension_evidence or {}).items()
@@ -125,6 +135,21 @@ def adj_factor_result(expected, facts, history=None, *, suspension_evidence=None
                      for gap in result.gaps if set(gap["symbols"])-suspension_evidence.keys())
         result = ValidationResult(PartitionState.VALID if count.complete else PartitionState.INCOMPLETE,
             (count,), {**result.checks, "listing_suspension_legal_na": suspension_evidence}, gaps)
+    if historical_traded is not None and result.counts[0].missing:
+        unknown = (set(expected) - facts.keys() - suspension_evidence.keys()) - set(historical_traded)
+        original = result.counts[0]
+        counts = CheckCounts(original.unit, original.expected, original.valid, original.legal_na,
+                             original.missing - len(unknown), original.invalid, len(unknown))
+        if unknown:
+            gaps = tuple({**gap, "symbols": sorted(set(gap["symbols"]) - unknown)}
+                         for gap in result.gaps if set(gap["symbols"]) - unknown)
+            state = PartitionState.INCOMPLETE if counts.missing or counts.invalid else PartitionState.UNVERIFIED
+            result = ValidationResult(
+                state, (counts,), {**result.checks, "adj_factor_raw_revision": raw_revision,
+                                  "adj_factor_suspend_revision": suspend_revision},
+                gaps + ({"classification": "UNVERIFIED", "symbols": sorted(unknown)},),
+                reason="adj_factor_history_evidence_pending" if state is PartitionState.UNVERIFIED else None,
+            )
     history = history or {}
     state = history.get("status")
     if state in {"RUNNING", "INTERRUPTED"}:
@@ -247,6 +272,8 @@ class PhysicalValidator:
             + a_share_ts_code_filter("ts_code"), (day,))
         authority = load_default_security_source_identity_manifest()
         canonical = self._canonical_raw_codes(authority, [str(r["ts_code"]).strip() for r in codes], day)
+        if dataset is None:
+            return canonical
         return {authority.resolve(code, day, dataset).source_ts_code for code in canonical}
 
     def validate(self, conn, obligation: Obligation, day: date, revision: int) -> ValidationResult:
@@ -273,7 +300,6 @@ class PhysicalValidator:
                 # Only the aggregate's suspect keys need timestamp readback;
                 # reuse shared halt semantics, never exempt by row count alone.
                 from backend.data_service.suspension_day_authority import required_minute_end_times
-                from .catalog import CN
                 start = datetime.combine(day, datetime.min.time(), CN)
                 events = rows(conn, """SELECT ts_code,trade_date,suspend_type,suspend_timing
                     FROM market.suspend_d WHERE trade_date=%s AND ts_code=ANY(%s::character(9)[])""", (day, sorted(missing)))
@@ -364,8 +390,20 @@ class PhysicalValidator:
                 FROM market.dataset_date_refresh_audit WHERE dataset='adj_factor'
                   AND trade_date=%s AND data_source='canonical_db'""", (day,))
             history = history_rows[0].get("history") if history_rows else None
-            evidence = adj_factor_suspension_evidence(conn, day, set(expected)-facts.keys(), authority)
-            return adj_factor_result(expected, facts, history, suspension_evidence=evidence)
+            absent = set(expected) - facts.keys()
+            evidence = adj_factor_suspension_evidence(conn, day, absent, authority)
+            historical_traded = None
+            revisions = {}
+            if absent - evidence.keys() and (datetime.now(CN).date() - day).days >= 7:
+                historical_traded = self._traded(conn, day, None)
+                revisions = {row["dataset"]: row["data_revision"] for row in rows(conn, """
+                    SELECT dataset,data_revision FROM market.dataset_date_refresh_audit
+                    WHERE dataset IN ('kline_daily_raw','suspend_d')
+                      AND trade_date=%s AND data_source='canonical_db'""", (day,))}
+            return adj_factor_result(expected, facts, history, suspension_evidence=evidence,
+                                     historical_traded=historical_traded,
+                                     raw_revision=revisions.get("kline_daily_raw"),
+                                     suspend_revision=revisions.get("suspend_d"))
         if dataset == "index_daily":
             # index_basic is a request catalogue (including nonquoted variants),
             # not a dated publication authority. Never turn it into fake gaps.

@@ -410,7 +410,8 @@ def test_dated_adj_factor_suspension_requires_disclosure_and_yields_to_trades(mo
     invalid = validation.adj_factor_result({code}, {code: {"adj_factor": 0}}, suspension_evidence=evidence)
     assert invalid.state.value == "INCOMPLETE" and invalid.counts[0].invalid == 1
     alias = authority.resolve(code, day, "market.kline_daily_raw").source_ts_code
-    monkeypatch.setattr(validation, "rows", lambda *_: [{"ts_code": alias}])
+    monkeypatch.setattr(validation, "rows", lambda _conn, query, _params: [{"ts_code": alias}]
+                        if "market.kline_daily_raw" in query else [])
     assert validation.adj_factor_suspension_evidence(object(), day, {code}, authority) == {}
 
 
@@ -1508,3 +1509,28 @@ def test_reference_current_bound_scan_keeps_existing_native_contract(dataset, mo
     monkeypatch.setattr(validation, 'rows', read)
     assert validation.PhysicalValidator().validate(None,
         Obligation(dataset, 'reference', '20:05'), day, 2).state == PartitionState.VALID
+
+
+def test_historical_factor_absence_requires_dated_evidence_and_keeps_real_gaps():
+    from backend.services.data_integrity.validation import adj_factor_result
+
+    listed = {"601268.SH", "000001.SZ", "000002.SZ"}
+    facts = {"000001.SZ": {"adj_factor": 1.2}}
+    uncertain = adj_factor_result(listed, facts, historical_traded=set(), raw_revision=9)
+    assert uncertain.state == "UNVERIFIED"
+    assert uncertain.reason == "adj_factor_history_evidence_pending"
+    assert uncertain.counts[0].missing == 0
+    assert uncertain.counts[0].unverified == 2
+    assert uncertain.checks["adj_factor_raw_revision"] == 9
+
+    mixed = adj_factor_result(listed, facts, historical_traded={"000002.SZ"}, raw_revision=10)
+    assert mixed.state == "INCOMPLETE"
+    assert mixed.counts[0].missing == 1
+    assert mixed.gaps == (
+        {"classification": "MISSING", "symbols": ["000002.SZ"]},
+        {"classification": "UNVERIFIED", "symbols": ["601268.SH"]},
+    )
+    confirmed = adj_factor_result(listed, {**facts, "000002.SZ": {"adj_factor": 1.0}},
+        historical_traded={"000002.SZ"}, suspension_evidence={"601268.SH": "verified full-day suspension"})
+    assert confirmed.state == "VALID"
+    assert confirmed.counts[0].legal_na == 1

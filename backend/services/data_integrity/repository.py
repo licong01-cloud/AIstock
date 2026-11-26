@@ -140,6 +140,34 @@ class IntegrityRepository:
                 (dataset,trade_date,data_source,status,row_count,quality_status)
                 VALUES (%s,%s,'canonical_db','failed',0,'unproven') ON CONFLICT DO NOTHING""", (dataset, day))
 
+    @staticmethod
+    def wake_adj_factor_history(conn, *, limit: int = 10) -> list[dict[str, Any]]:
+        """Wake previously parked validations only after dated evidence changes."""
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("""WITH changed AS (
+                SELECT t.target_id FROM market.data_sync_targets t
+                JOIN market.dataset_date_refresh_audit p ON p.dataset=t.dataset
+                  AND p.trade_date=t.target_date AND p.data_source='canonical_db'
+                WHERE t.dataset='adj_factor' AND t.data_source='canonical_db'
+                  AND t.target_scope->>'operation'='VALIDATE_ONLY' AND t.target_status='final_blocked'
+                  AND p.validation_status='UNVERIFIED'
+                  AND p.metadata#>>'{validation,reason}'='adj_factor_history_evidence_pending'
+                  AND p.data_revision=(t.metadata->>'desired_revision')::bigint
+                  AND EXISTS (
+                    SELECT 1 FROM market.dataset_date_refresh_audit q
+                    WHERE q.dataset IN ('kline_daily_raw','suspend_d')
+                      AND q.trade_date=p.trade_date AND q.data_source='canonical_db'
+                      AND q.data_revision::text IS DISTINCT FROM
+                        (p.metadata->'validation'->'checks'->>
+                          CASE WHEN q.dataset='kline_daily_raw' THEN 'adj_factor_raw_revision'
+                               ELSE 'adj_factor_suspend_revision' END)
+                  )
+                ORDER BY t.target_date DESC,t.target_id LIMIT %s FOR UPDATE OF t SKIP LOCKED
+            ) UPDATE market.data_sync_targets t SET target_status='pending',
+                next_retry_at=clock_timestamp(),updated_at=clock_timestamp()
+              FROM changed WHERE t.target_id=changed.target_id RETURNING t.target_date""", (limit,))
+            return [dict(row) for row in cur.fetchall()]
+
     def claim(self, dataset: str, day: date, *, lease_seconds: int = 300) -> dict[str, Any] | None:
         if not 10 <= lease_seconds <= 1800:
             raise ValueError("validation lease must be bounded")
@@ -210,10 +238,12 @@ class IntegrityRepository:
             retry_minutes = validation_retry_minutes(day, today=datetime.now(CN).date(),
                 unchanged=partition.get("validation_id") == validation_id,
                 attempts=int(target.get("attempt_count") or 0) + 1)
-            retry_at = None if complete else datetime.now(timezone.utc) + timedelta(minutes=retry_minutes)
+            evidence_pending = dataset == "adj_factor" and result.reason == "adj_factor_history_evidence_pending"
+            target_status = "reconciled" if complete else "final_blocked" if evidence_pending else "retry"
+            retry_at = None if target_status != "retry" else datetime.now(timezone.utc) + timedelta(minutes=retry_minutes)
             attempt_id = "dsa_"+uuid4().hex
             attempt_number = int(target.get("attempt_count") or 0)+1
-            attempt_status = "reconciled" if complete else "failed" if result.state.value == "ERROR" else "retry"
+            attempt_status = "failed" if result.state.value == "ERROR" else target_status
             cur.execute("""INSERT INTO market.data_sync_attempts
                 (attempt_id,target_id,attempt_no,status,trigger_source,started_at,finished_at,
                  rows_observed,error_message,retry_after,context_json)
@@ -226,7 +256,7 @@ class IntegrityRepository:
                 metadata=metadata-'lease_token'-'lease_until',updated_at=clock_timestamp(),
                 attempt_count=%s,last_attempt_id=%s,last_attempt_status=%s,
                 reconciled_at=CASE WHEN %s THEN clock_timestamp() ELSE NULL END WHERE target_id=%s""",
-                ("reconciled" if complete else "retry", retry_at,attempt_number,attempt_id,attempt_status, complete, target_id))
+                (target_status, retry_at, attempt_number, attempt_id, attempt_status, complete, target_id))
             return readback
 
     def append_day(self, conn, day: date, summary: Mapping[str, Any]) -> dict[str, Any]:
