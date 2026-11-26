@@ -197,8 +197,8 @@
   },
   "first_seen_at": "2026-11-26T04:50:10.675752Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "b8d5337e5aec7f6ed32b8b6a1e2d8c555d575501",
+  "fixed_at": "2026-11-26T05:13:49Z",
   "fresh_process_receipt_sha256": "11a7c7aca3ba90686a76ba3a39c4fc8ac66351fc32ff89a2724de6532c0c8007",
   "github_issue_number": 7483,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7483",
@@ -233,6 +233,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7484",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -298,6 +299,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -310,7 +312,29 @@
   "schema_version": "aistock_validation_bug_v1",
   "scope_expansion_reason": "The existing explicitly invoked test-send CLI calls the same card sender and must preserve the new prepared-message preflight and app receipt contract. No test send is executed by this repair.",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2289",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "d1891b99ba71aa54",
+    "recorded_at": "2026-11-26T05:14:42.280188Z",
+    "runtime_contract_digest": "7b1423491f0f2eea1820be95f724c6e1534b176b7ef4a2e67c186b77309ddb44",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "6c9361980e3feb828788f7499fc5e0c970e14ae7",
+    "source_merge_commit": "b8d5337e5aec7f6ed32b8b6a1e2d8c555d575501",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7484",
+    "validation_evidence": [
+      "python -m nox -s l0 -> passed",
+      "rtk pytest -q backend/tests/advisory_model_first/test_advisory_notifications.py backend/tests/advisory_model_first/test_advisory_feishu_sheets.py backend/tests/advisory_model_first/test_advisory_notification_presentation.py backend/tests/advisory_model_first/test_advisory_feishu_app_messages.py -> 130 passed"
+    ],
+    "validation_evidence_digest": "fd5f34e3359bc9755019a1bc69eadba31bc101d19c34b75caaa25231119b6414"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "advisory"
   ],
@@ -324,7 +348,8 @@
     "Existing DEV native receipt checkpoint/readback and daily dedupe -> 1 passed, full rollback and independent zero-row check",
     "Affected configuration and compact-wire tests -> passed",
     "python -m nox -s l0 -> passed",
-    "changed-file Ruff and git diff --check -> passed"
+    "changed-file Ruff and git diff --check -> passed",
+    "rtk pytest -q backend/tests/advisory_model_first/test_advisory_notifications.py backend/tests/advisory_model_first/test_advisory_feishu_sheets.py backend/tests/advisory_model_first/test_advisory_notification_presentation.py backend/tests/advisory_model_first/test_advisory_feishu_app_messages.py -> 130 passed"
   ],
   "verification_budget": {
     "budget": "standard",
