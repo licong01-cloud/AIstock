@@ -27,7 +27,11 @@ def configured_channels(config):
         'smtp_server', 'smtp_port', 'email_from', 'email_password', 'email_to'
     )):
         channels.append('email')
-    if (config.get('webhook_enabled') and config.get('webhook_url')
+    # Preserve the existing outbox channel/event identity across the switch.
+    if (config.get('advisory_feishu_completion_only') and config.get('advisory_feishu_details')):
+        if config.get('advisory_feishu_app_messages'):
+            channels.append('webhook')
+    elif (config.get('webhook_enabled') and config.get('webhook_url')
             and (config.get('webhook_type') == 'dingtalk'
                  or (config.get('webhook_type') == 'feishu'
                      and config.get('advisory_feishu_completion_only')))):
@@ -196,7 +200,8 @@ class AdvisoryNotificationService:
                         lambda state: self.repository.checkpoint_detail(
                             row, state, self.now_provider().astimezone(CN)),
                         lambda subject, card: self.transport.send_detail_card(card),
-                        prepare_message=mobile_card,
+                        prepare_message=lambda payload, url: self.transport.prepare_detail_card(
+                            mobile_card(payload, url), row['event_key']),
                     ) is True
                 else:
                     accepted = self.transport.send_external_message(

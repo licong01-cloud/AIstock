@@ -393,8 +393,9 @@ def test_service_queues_details_once_uses_separate_route_and_freezes_retry(monke
             return 'SENT'
     transport = SimpleNamespace(
         config=dict(advisory_feishu_completion_only=True, advisory_feishu_details=True,
-                    webhook_enabled=True, webhook_type='feishu', webhook_url='configured'),
+                    advisory_feishu_app_messages=True, webhook_enabled=True, webhook_type='feishu', webhook_url='configured'),
         detail_delivery=lambda: DetailSheetDelivery(Remote()), send_detail_card=lambda *_: True,
+        prepare_detail_card=lambda card, key: card,
         send_external_message=lambda *_: True)
     builder = DetailSnapshotBuilder(History(), Returns(), lambda items: items)
     service = AdvisoryNotificationService(Repo(), transport, lambda: clock, builder)
@@ -421,7 +422,7 @@ def test_incomplete_roster_does_not_capture_or_send(monkeypatch):
                            snapshot=lambda _: (TARGET, [dict(ROSTER[0], publication_status='WAITING_DATA')]),
                            claim=lambda *a, **k: None)
     transport = SimpleNamespace(config=dict(advisory_feishu_completion_only=True, advisory_feishu_details=True,
-                                           webhook_enabled=True, webhook_type='feishu', webhook_url='configured'))
+                                           advisory_feishu_app_messages=True, webhook_enabled=True, webhook_type='feishu', webhook_url='configured'))
     builder = SimpleNamespace(build=lambda *_: pytest.fail('incomplete publication'))
     assert AdvisoryNotificationService(repo, transport, lambda: NOW, builder).run_once()['queued'] == 0
 
@@ -434,7 +435,7 @@ def test_cross_day_detail_capture_failure_remains_visible_and_never_queues(monke
                            enqueue=lambda *a: pytest.fail('failed capture must not queue'),
                            claim=lambda *a, **k: None)
     transport = SimpleNamespace(config=dict(advisory_feishu_completion_only=True, advisory_feishu_details=True,
-                                           webhook_enabled=True, webhook_type='feishu', webhook_url='configured'))
+                                           advisory_feishu_app_messages=True, webhook_enabled=True, webhook_type='feishu', webhook_url='configured'))
 
     def failed_build(*args, **kwargs):
         assert kwargs['decision_date'] == NOW.date()
