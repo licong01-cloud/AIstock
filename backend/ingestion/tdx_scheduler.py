@@ -179,6 +179,8 @@ def _is_auto_retry_excluded_dataset(dataset: str) -> bool:
 
 
 def _terminal_adj_factor_history(outcome: Dict[str, Any]) -> bool:
+    if outcome.get("status") == "success":
+        return False
     history = outcome.get("history_reconciliation") or {}
     failures = history.get("failures") or []
     return bool(failures) and all(f.get("retryable") is False for f in failures)
@@ -1349,6 +1351,12 @@ class TDXScheduler:
                               AND a.details->>'alert_gate'='data_sync_targets_final_state'))
                           AND a.details->>'target_id'=t.target_id)))
                   AND t.data_source IN ('readiness_gate','tushare','integrity_repair')
+                  AND NOT (t.dataset='adj_factor' AND t.data_source='integrity_repair'
+                      AND COALESCE(p.metadata#>>'{validation,reason}',t.last_error_message,'')='adj_factor_history_evidence_pending'
+                      AND NOT EXISTS (SELECT 1 FROM market.data_alerts e WHERE e.dataset=t.dataset
+                          AND NOT e.acknowledged AND e.details->>'target_id'=t.target_id)
+                      AND NOT COALESCE(p.validation_status IN ('VALID','NOT_APPLICABLE')
+                          AND p.data_revision=p.validated_revision,FALSE))
                   AND target_date IS NOT NULL
                 ORDER BY t.dataset, target_date DESC, t.updated_at DESC)
                 SELECT * FROM candidates
@@ -1706,18 +1714,25 @@ class TDXScheduler:
         day = self._coerce_target_date(target.get("target_date"))
         if day is None:
             return False
-        records = self._fetchall("""SELECT data_revision,validated_revision,validation_status,
+        records = self._fetchall("""SELECT data_revision,validated_revision,validation_status,validation_id,
             metadata->'validation' AS validation FROM market.dataset_date_refresh_audit
             WHERE dataset='adj_factor' AND trade_date=%s AND data_source='canonical_db'""", (day,))
         row = records[0] if records else {}
         verdict = row.get("validation") or {}
+        current = row.get("data_revision") is not None and row["data_revision"] == row.get("validated_revision")
+        historical = (_now().astimezone(_CN_TZ).date() - day).days >= 7
         gaps = verdict.get("gaps") or []
+        actionable = {"MISSING", "INVALID", "HISTORY_CONFLICT"}
         from ..services.data_integrity.stock_scope import is_supported_stock_code
-        symbols = sorted({str(code).strip() for gap in gaps for code in gap.get("symbols", [])
-                          if is_supported_stock_code(str(code).strip())})
-        if (row.get("validation_status") == "INCOMPLETE"
-                and row.get("data_revision") == row.get("validated_revision") and symbols
-                and all(gap.get("classification") in {"MISSING", "INVALID", "HISTORY_CONFLICT"} for gap in gaps)):
+        symbols = sorted({str(code).strip() for gap in gaps if gap.get("classification") in actionable
+                          for code in gap.get("symbols", []) if is_supported_stock_code(str(code).strip())})
+        validation_key = {"adj_factor_validation_id": row.get("validation_id")}
+        if current and verdict.get("reason") == "adj_factor_history_evidence_pending":
+            DataSyncTargetRepository().park_adj_factor_repair(str(target["target_id"]),
+                reason="adj_factor_history_evidence_pending", validation_id=row.get("validation_id"))
+            return False
+        if (row.get("validation_status") == "INCOMPLETE" and current and symbols
+                and all(gap.get("classification") in actionable | {"UNVERIFIED"} for gap in gaps)):
             from ..data_service.security_source_identity import load_default_security_source_identity_manifest
             authority = load_default_security_source_identity_manifest()
             quote_codes = [authority.resolve(code, day, "market.kline_daily_raw").source_ts_code for code in symbols]
@@ -1735,13 +1750,31 @@ class TDXScheduler:
                 b.list_status='D' AND b.delist_date<=r.day
                 AND NOT EXISTS (SELECT 1 FROM market.kline_daily_raw p
                     WHERE p.ts_code IN (r.code,r.quote_code) AND p.trade_date=r.day
-                      AND (p.volume_hand>0 OR p.volume_shares>0 OR p.amount_li>0)) AS retired_on_date
+                      AND (p.volume_hand>0 OR p.volume_shares>0 OR p.amount_li>0)) AS retired_on_date,
+                EXISTS (SELECT 1 FROM market.kline_daily_raw p WHERE p.ts_code IN (r.code,r.quote_code)
+                    AND p.trade_date=r.day AND p.adjust_type='none' AND p.close_li>0
+                    AND (p.volume_hand>0 OR p.volume_shares>0)) AS traded_on_date
             FROM requested r LEFT JOIN market.stock_basic b ON b.ts_code=r.code""",
                 (day, symbols, quote_codes))
             retired = {str(item["ts_code"]).strip() for item in observed if item["retired_on_date"]}
             available = {str(item["ts_code"]).strip() for item in observed if item["collectable"]} - retired
             missing = sorted(set(symbols) - available - retired)
             symbols = sorted(set(symbols) & available)
+            if historical and "adj_factor_raw_revision" not in (verdict.get("checks") or {}):
+                # A legacy verdict did not separate physical absence from dated
+                # applicability. Retain existing INVALID/HISTORY_CONFLICT keys.
+                non_missing = {str(code).strip() for gap in gaps if gap.get("classification") != "MISSING"
+                               for code in gap.get("symbols", [])}
+                traded = {str(item["ts_code"]).strip() for item in observed if item.get("traded_on_date")}
+                unknown = (set(symbols) | set(missing)) - traded - non_missing
+                symbols = [code for code in symbols if code not in unknown]
+                if unknown and not symbols:
+                    from ..services.data_integrity.repository import enqueue_validation
+                    with get_conn(autocommit=False, manage_transaction=True) as conn:
+                        enqueue_validation(conn, "adj_factor", day, source_completed=True)
+                    DataSyncTargetRepository().park_adj_factor_repair(str(target["target_id"]),
+                        reason="adj_factor_history_evidence_pending", validation_id=row.get("validation_id"))
+                    return False
             if not symbols and missing:
                 DataSyncTargetRepository().mark_retry(str(target["target_id"]),
                     retry_after=_now() + dt.timedelta(days=1),
@@ -1750,7 +1783,7 @@ class TDXScheduler:
                 return False
             if symbols:
                 target["metadata"] = {**(target.get("metadata") or {}),
-                    "history_reconcile_symbols": symbols, "history_unavailable_symbols": missing}
+                    **validation_key, "history_reconcile_symbols": symbols, "history_unavailable_symbols": missing}
                 return True
             # A retired-only gap needs a fresh canonical verdict, not a fetch.
         from ..services.data_integrity.repository import enqueue_validation
@@ -2490,6 +2523,12 @@ class TDXScheduler:
             cmd = self._build_ingestion_command(dataset, mode, cmd_opts)
             if stdin_payload:
                 cmd.append("--history-reconcile-symbols-stdin")
+            elif (mode_lower == "incremental" and triggered_by in {"schedule", "auto_retry", "data_sync_target_due"}
+                    and symbols is None and not cmd_opts.get("args")
+                    and not cmd_opts.get("history_reconcile_dry_run")
+                    and Path(cmd_opts.get("script") or DEFAULT_INGEST_TUSHARE_ADJ_FACTOR).resolve()
+                    == DEFAULT_INGEST_TUSHARE_ADJ_FACTOR.resolve()):
+                cmd.append("--scheduled-daily")
             future = self._executor.submit(
                 self._run_ingestion_process,
                 run_id,
@@ -2616,6 +2655,7 @@ class TDXScheduler:
             if not isinstance(symbols, list) or not symbols:
                 raise ValueError("exact adj_factor repair requires validated gap symbols")
             retry_opts["history_reconcile_symbol"] = symbols
+            retry_opts["adj_factor_validation_id"] = (target.get("metadata") or {}).get("adj_factor_validation_id")
         if target_date is not None:
             target_date_text = target_date.isoformat()
             retry_opts.update(
@@ -2703,13 +2743,18 @@ class TDXScheduler:
         recovered = False
         failure_category = "not_ready_after_retry"
         history_failed = False
+        factor_history = {}
+        factor_job_succeeded = False
         if health_dataset == "adj_factor" and options.get("job_id"):
             try:
                 outcome = self._job_update_outcome(uuid.UUID(str(options["job_id"])))
-                history_failed = bool((outcome.get("history_reconciliation") or {}).get("failures"))
+                factor_history = outcome.get("history_reconciliation") or {}
+                factor_job_succeeded = outcome.get("status") == "success"
+                history_failed = not factor_job_succeeded and bool(factor_history.get("failures"))
                 if _terminal_adj_factor_history(outcome):
                     context = {"job_id": options["job_id"], "failure_category": "adj_factor_history_conflict",
-                               "history_reconciliation": outcome["history_reconciliation"]}
+                               "history_reconciliation": factor_history,
+                               "adj_factor_validation_id": options.get("adj_factor_validation_id")}
                     repo.mark_final_blocked(target_id, reason="adj_factor_history_conflict", context=context)
                     repo.record_attempt(DataSyncAttemptRecord(target_id=target_id, status="final_blocked",
                         job_id=options["job_id"], trigger_source="data_sync_target_retry", finished_at=now,
@@ -2765,6 +2810,15 @@ class TDXScheduler:
                     finished_at=now,
                     context=metadata,
                 )
+                return
+
+            if (health_dataset == "adj_factor" and options.get("integrity_repair") is True
+                    and target_date is not None and (now.astimezone(_CN_TZ).date() - target_date).days >= 7
+                    and options.get("adj_factor_validation_id") and error_message is None
+                    and factor_job_succeeded and factor_history.get("status") == "unchanged"
+                    and factor_history.get("written_row_count") == 0 and factor_history.get("completed_symbols")):
+                repo.park_adj_factor_repair(target_id, reason="adj_factor_history_source_unchanged",
+                                            validation_id=options["adj_factor_validation_id"])
                 return
 
             if error_message is None and self._defer_completed_event_fetch({
@@ -3039,6 +3093,19 @@ class TDXScheduler:
                     self._reconcile_recovered_target_state(dataset=dataset, target_id=target.get("target_id"),
                         target_date=target_date, trigger_source="final_alert_readback",
                         context={"canonical_validation_id": partition["validation_id"]})
+                    continue
+                if dataset == "adj_factor" and target.get("data_source") == "integrity_repair" and (
+                    (partition.get("current") and partition.get("state") == "UNVERIFIED"
+                     and ((partition.get("metadata") or {}).get("validation") or {}).get("reason")
+                     == "adj_factor_history_evidence_pending")
+                    or failure_category == "adj_factor_history_evidence_pending"
+                ):
+                    # The dated issue stays visible as unverified. Retire the
+                    # superseded automatic-fetch alarm for this exact target.
+                    self._execute("""UPDATE market.data_alerts SET acknowledged=TRUE,ack_at=NOW()
+                        WHERE dataset='adj_factor' AND NOT acknowledged
+                          AND details->>'target_id'=%s
+                          AND details->>'alert_gate'='data_sync_targets_final_state'""", (target.get("target_id"),))
                     continue
                 recovery_ids = context.get("recovery_target_ids") or []
             if status == "reconciled" or (reopened and not recovery_ids):
@@ -5006,7 +5073,8 @@ class TDXScheduler:
                                     DataSyncTargetRepository().mark_final_blocked(target_id,
                                         reason="adj_factor_history_conflict", context={"job_id": str(retry_job_id)})
                                 break
-                            history_failed = bool((outcome.get("history_reconciliation") or {}).get("failures"))
+                            history_failed = outcome.get("status") != "success" and bool(
+                                (outcome.get("history_reconciliation") or {}).get("failures"))
                             r = None if history_failed else self._check_dataset_recovered(ds)
                             if r is not None:
                                 if r.status == "ok":

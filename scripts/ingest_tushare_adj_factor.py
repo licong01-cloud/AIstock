@@ -125,6 +125,10 @@ def parse_args() -> argparse.Namespace:
         help="Read the exact incremental repair scope as a JSON array from standard input",
     )
     parser.add_argument(
+        "--scheduled-daily", action="store_true",
+        help="Report daily partition and history reconciliation outcomes independently",
+    )
+    parser.add_argument(
         "--history-reconcile-dry-run",
         action="store_true",
         help="Audit stable full histories without replacing market.adj_factor rows",
@@ -147,6 +151,9 @@ def parse_args() -> argparse.Namespace:
         ):
             parser.error("adj_factor repair scope must be a non-empty array of stock codes")
         args.history_reconcile_symbol = symbols
+    if args.scheduled_daily and (args.mode != "incremental" or args.history_reconcile_symbol
+                                 or args.history_reconcile_dry_run):
+        parser.error("--scheduled-daily requires full-scope incremental ingestion")
     return args
 
 
@@ -593,6 +600,27 @@ def run_ingestion(
     return stats
 
 
+def _scheduled_daily_partitions(conn, start_date: dt.date, end_date: dt.date) -> list[dict[str, Any]]:
+    """Read the canonical daily contract after history writes have committed."""
+    from backend.services.data_integrity.catalog import obligations
+    from backend.services.data_integrity.validation import PhysicalValidator
+
+    obligation = next(o for o in obligations()[0] if o.dataset == "adj_factor")
+    validator = PhysicalValidator()
+    previous = conn.autocommit
+    conn.autocommit = False
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+        return [
+            {"fact_date": str(day), **validator.validate(conn, obligation, day, 0).as_dict()}
+            for day in _trading_dates(conn, min(start_date, end_date), end_date)
+        ]
+    finally:
+        conn.rollback()
+        conn.autocommit = previous
+
+
 def main() -> None:
     args = parse_args()
     mode = (args.mode or "init").strip().lower()
@@ -664,6 +692,7 @@ def main() -> None:
 
         try:
             history_receipt = None
+            daily_partitions = None
             if mode == "incremental":
                 _log(
                     conn,
@@ -673,7 +702,13 @@ def main() -> None:
                     "this is the only incremental market.adj_factor write path",
                 )
                 history_receipt = run_history_ingestion(conn, args, job_id, end_date)
-                if history_receipt.get("failures"):
+                if getattr(args, "scheduled_daily", False):
+                    daily_partitions = _scheduled_daily_partitions(conn, start_date, end_date)
+                    if any(partition["state"] != "VALID" for partition in daily_partitions):
+                        _finish_job(conn, job_id, "failed", {"history_reconciliation": history_receipt,
+                                                           "daily_partitions": daily_partitions})
+                        raise RuntimeError("adj_factor scheduled daily partition did not validate")
+                elif history_receipt.get("failures"):
                     _finish_job(conn, job_id, "failed", {"history_reconciliation": history_receipt})
                     raise RuntimeError(f"adj_factor history unresolved: {history_receipt['failed_symbols']}")
                 _log(
@@ -713,6 +748,8 @@ def main() -> None:
             finish_summary = {"stats": stats}
             if history_receipt is not None:
                 finish_summary["history_reconciliation"] = history_receipt
+            if daily_partitions is not None:
+                finish_summary["daily_partitions"] = daily_partitions
             _finish_job(conn, job_id, "success", finish_summary)
             print(
                 f"[DONE] adj_factor mode={mode} stats={stats} "
