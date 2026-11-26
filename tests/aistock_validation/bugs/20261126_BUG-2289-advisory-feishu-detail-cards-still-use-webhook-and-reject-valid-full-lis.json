@@ -44,31 +44,38 @@
     "readonly:2026-11-25:event_ebbf336515c940a573faba16c235b4f40c160d4a952c34a258424ae1c960c17d:card19548:body19582:rows216"
   ],
   "expected": "The six-package full mobile table and existing spreadsheet link are delivered through the configured app bot as one daily event; exact byte guard runs before send-started and failures stay visible; other notifications retain behavior.",
+  "external_readonly_validation": {
+    "auth_code": 0,
+    "auth_http": 200,
+    "conclusion": "App credentials authenticate. Current recipient rendering and actual send acceptance remain unverified.",
+    "configured_chat_get": "CONNECTION_ERROR",
+    "external_messages": 0
+  },
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261126_BUG-2289-advisory-feishu-detail-cards-still-use-webhook-and-reject-valid-full-lis.json",
       "backend/services/advisory_forward/feishu_sheets.py",
       "backend/services/advisory_forward/notification_presentation.py",
       "backend/services/advisory_forward/notification_transport.py",
       "backend/services/advisory_forward/notifications.py",
+      "backend/tests/advisory_model_first/test_advisory_feishu_app_messages.py",
       "backend/tests/advisory_model_first/test_advisory_feishu_sheets.py",
       "backend/tests/advisory_model_first/test_advisory_notification_presentation.py",
       "scripts/advisory_feishu_details.py",
-      "backend/tests/advisory_model_first/test_advisory_feishu_app_messages.py"
+      "tests/aistock_validation/bugs/20261126_BUG-2289-advisory-feishu-detail-cards-still-use-webhook-and-reject-valid-full-lis.json"
     ],
     "added_files": [
       "backend/tests/advisory_model_first/test_advisory_feishu_app_messages.py"
     ],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261126_BUG-2289-advisory-feishu-detail-cards-still-use-webhook-and-reject-valid-full-lis.json",
       "backend/services/advisory_forward/feishu_sheets.py",
       "backend/services/advisory_forward/notification_presentation.py",
       "backend/services/advisory_forward/notification_transport.py",
       "backend/services/advisory_forward/notifications.py",
+      "backend/tests/advisory_model_first/test_advisory_feishu_app_messages.py",
       "backend/tests/advisory_model_first/test_advisory_feishu_sheets.py",
       "backend/tests/advisory_model_first/test_advisory_notification_presentation.py",
       "scripts/advisory_feishu_details.py",
-      "backend/tests/advisory_model_first/test_advisory_feishu_app_messages.py"
+      "tests/aistock_validation/bugs/20261126_BUG-2289-advisory-feishu-detail-cards-still-use-webhook-and-reject-valid-full-lis.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -236,6 +243,12 @@
     "advisory_modeling_backend",
     "platform_api_backend"
   ],
+  "review_final_source_sha256": {
+    "backend/services/advisory_forward/feishu_sheets.py": "e6194ef83cfa4ae50c0dde7a5c016967e30e0b83a1b318f89e83461933b6f55e",
+    "backend/services/advisory_forward/notification_presentation.py": "d46576ef1de674c0b6f3f157a2b3ade90834350bd5af947c6d928ae9c03ddbc7",
+    "backend/services/advisory_forward/notification_transport.py": "3e73eeddb6b93435eb8c2d81b6a8982ea604e13ad41eace4f50152c32cce5f81",
+    "backend/services/advisory_forward/notifications.py": "bed15d3fa25391747f73e680b25892541230706cdefa7e5780b5199e142fd0e0"
+  },
   "review_rounds": [
     {
       "findings": [
@@ -257,13 +270,13 @@
       "round": 2
     },
     {
-      "round": 3,
-      "focus": "final implementation and source-bound evidence",
       "findings": [
         "L0 initially flagged a literal dummy token in a test fixture; replaced with a generated token.",
         "RAW_JSON_UI medium finding is a transport-only JSON encoder with no UI exposure."
       ],
-      "resolution": "Affected wire test, Ruff, diff and L0 passed; fresh-process source hashes verified; production writes and sends remain zero."
+      "focus": "final implementation and source-bound evidence",
+      "resolution": "Affected wire test, Ruff, diff and L0 passed; fresh-process source hashes verified; production writes and sends remain zero.",
+      "round": 3
     }
   ],
   "risk_area": "bug",
@@ -424,18 +437,5 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
-  },
-  "external_readonly_validation": {
-    "auth_http": 200,
-    "auth_code": 0,
-    "configured_chat_get": "CONNECTION_ERROR",
-    "external_messages": 0,
-    "conclusion": "App credentials authenticate. Current recipient rendering and actual send acceptance remain unverified."
-  },
-  "review_final_source_sha256": {
-    "backend/services/advisory_forward/notification_transport.py": "3e73eeddb6b93435eb8c2d81b6a8982ea604e13ad41eace4f50152c32cce5f81",
-    "backend/services/advisory_forward/notification_presentation.py": "d46576ef1de674c0b6f3f157a2b3ade90834350bd5af947c6d928ae9c03ddbc7",
-    "backend/services/advisory_forward/notifications.py": "bed15d3fa25391747f73e680b25892541230706cdefa7e5780b5199e142fd0e0",
-    "backend/services/advisory_forward/feishu_sheets.py": "e6194ef83cfa4ae50c0dde7a5c016967e30e0b83a1b318f89e83461933b6f55e"
   }
 }
