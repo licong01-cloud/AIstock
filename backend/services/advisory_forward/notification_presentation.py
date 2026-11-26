@@ -9,7 +9,6 @@ from .notification_details import CHANGES, GROUPS, HEADERS, DetailDeliveryError,
 
 PRESENTATION_VERSION = 'advisory_feishu_mobile_full_tables_v3'
 MAX_MOBILE_TABLES = 5
-CARD_BUDGET = 18 * 1024  # Leave room under the existing 20KB sender limit for signing.
 
 
 def card_json_bytes(value):
@@ -141,8 +140,7 @@ def mobile_card(payload, url):
     card = dict(config={'wide_screen_mode': False},
                 header=dict(title=dict(tag='plain_text', content=display(payload['subject'], 80)), template='blue'),
                 elements=elements)
-    if len(card_json_bytes(card)) > CARD_BUDGET:
-        raise DetailDeliveryError('FEISHU_MOBILE_FULL_CARD_TOO_LARGE')
+    # Check capacity on the complete app request before recording send-started.
     return card
 
 

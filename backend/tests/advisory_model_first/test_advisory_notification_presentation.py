@@ -1,18 +1,13 @@
 """User-visible mobile/desktop contracts; all remote traffic is mocked."""
 import copy
 import json
-from types import SimpleNamespace
-from uuid import uuid4
 
 import pytest
 
-from backend.services.advisory_forward.feishu_sheets import DetailSheetDelivery
+from backend.services.advisory_forward.feishu_sheets import APP_MESSAGE_BUDGET, DetailSheetDelivery, FeishuSheetsClient
 from backend.services.advisory_forward.notification_details import DetailDeliveryError, fingerprint, workbook_tables
 from backend.services.advisory_forward.notification_presentation import (
-    CARD_BUDGET, PRESENTATION_VERSION, card_json_bytes, mobile_card, mobile_rows, overview_table,
-)
-from backend.services.advisory_forward.notification_transport import (
-    AdvisoryNotificationTransport, ExternalNotificationDeliveryError,
+    PRESENTATION_VERSION, card_json_bytes, mobile_card, mobile_rows, overview_table,
 )
 from backend.tests.advisory_model_first.test_advisory_feishu_sheets import Remote, payload
 
@@ -92,8 +87,8 @@ def test_oversized_many_package_card_fails_instead_of_omitting_any_package():
     data['detail_snapshot']['programs'] = [dict(copy.deepcopy(p), program_id=f'p{i}',
         program_name='策略包中文名称' * 20 + str(i)) for i in range(100)]
     sealed(data)
-    with pytest.raises(DetailDeliveryError, match='FULL_CARD_TOO_LARGE'):
-        mobile_card(data, URL)
+    with pytest.raises(DetailDeliveryError, match='APP_MESSAGE_TOO_LARGE'):
+        FeishuSheetsClient('app', 'secret', 'chat').prepare_card_message(mobile_card(data, URL), 'a' * 64)
     assert len(overview_table(data['detail_snapshot'])) == 101
     assert len(workbook_tables(data['detail_snapshot'])) == 102
 
@@ -123,7 +118,8 @@ def test_mobile_package_capacity_keeps_all_rows_and_package_identity(count):
             assert f"策略包 {i} · {program['program_name']}" in text(card)
     assert len(workbook_tables(data['detail_snapshot'])) == count + 2
     assert data == before
-    assert len(card_json_bytes(card)) <= CARD_BUDGET
+    assert len(card_json_bytes(FeishuSheetsClient('app', 'secret', 'chat').prepare_card_message(
+        card, 'a' * 64))) <= APP_MESSAGE_BUDGET
 
 
 def test_six_package_delivery_reuses_one_document_and_sends_exactly_once():
@@ -148,8 +144,8 @@ def test_six_package_delivery_reuses_one_document_and_sends_exactly_once():
 
 def test_oversized_full_card_fails_without_top_n_fallback():
     data = payload(400)
-    with pytest.raises(DetailDeliveryError, match='FULL_CARD_TOO_LARGE'):
-        mobile_card(data, URL)
+    with pytest.raises(DetailDeliveryError, match='APP_MESSAGE_TOO_LARGE'):
+        FeishuSheetsClient('app', 'secret', 'chat').prepare_card_message(mobile_card(data, URL), 'a' * 64)
 
 
 def test_empty_packages_are_still_reported_without_consuming_table_capacity():
@@ -224,39 +220,10 @@ def test_old_unsent_document_gets_overview_without_recreating_or_rewriting_detai
     assert len(remote.writes) == writes
 
 
-@pytest.fixture
-def transport():
-    obj = AdvisoryNotificationTransport.__new__(AdvisoryNotificationTransport)
-    obj.config = dict(advisory_feishu_details=True, advisory_feishu_completion_only=True,
-                      webhook_enabled=True, webhook_type='feishu', webhook_url='https://invalid.test/test',
-                      webhook_signing_secret=uuid4().hex)
-    return obj
 
 
-@pytest.mark.parametrize('http,code,result', [(200, 0, True), (200, 1, False), (200, False, None),
-                                            (503, 0, None), (200, None, None)])
-def test_card_strict_acceptance_and_shared_signing(monkeypatch, transport, http, code, result):
-    sent = []
-    def post(data):
-        sent.append(data)
-        return SimpleNamespace(status_code=http, json=lambda: {'code': code})
-    monkeypatch.setattr(transport, '_post_webhook', post)
-    card = mobile_card(payload(), URL)
-    if result is None:
-        with pytest.raises(ExternalNotificationDeliveryError):
-            transport.send_detail_card(card)
-    else:
-        assert transport.send_detail_card(card) is result
-    assert sent[0]['msg_type'] == 'interactive' and sent[0]['card'] == card
-    assert sent[0]['timestamp'] and sent[0]['sign']
 
 
-def test_card_size_and_disabled_details_never_send(monkeypatch, transport):
-    monkeypatch.setattr(transport, '_post_webhook', lambda *_: pytest.fail('must not send'))
-    with pytest.raises(ExternalNotificationDeliveryError, match='TOO_LARGE'):
-        transport.send_detail_card({'content': '超限' * 30000})
-    transport.config['advisory_feishu_details'] = False
-    assert transport.send_detail_card(mobile_card(payload(), URL)) is False
 
 
 def test_table_test_is_explicitly_labeled_and_within_actual_utf8_budget():
@@ -264,21 +231,6 @@ def test_table_test_is_explicitly_labeled_and_within_actual_utf8_budget():
     data['subject'] = '【测试】AIstock 手机全量表格'
     card = mobile_card(data, URL)
     assert '非新的荐股通知' in text(card)
-    assert len(card_json_bytes(card)) <= CARD_BUDGET
+    assert len(card_json_bytes(card)) <= APP_MESSAGE_BUDGET
 
 
-def test_card_guard_matches_actual_compact_utf8_wire_and_keeps_legacy_json_path(monkeypatch, transport):
-    import requests
-    calls = []
-    monkeypatch.setattr(requests, 'post', lambda *args, **kwargs: calls.append(kwargs) or SimpleNamespace(
-        status_code=200, json=lambda: {'code': 0}))
-    card = mobile_card(payload(60), URL)
-    assert transport.send_detail_card(card)
-    wire = calls[0]['data']
-    assert isinstance(wire, bytes) and len(wire) <= 20 * 1024
-    parsed = json.loads(wire)
-    assert wire == card_json_bytes(parsed) and parsed['card'] == card
-    assert '股票'.encode() in wire and b'\\u80a1' not in wire
-    assert calls[0]['headers']['Content-Type'] == 'application/json; charset=utf-8'
-    transport._post_webhook({'msg_type': 'text', 'content': {'text': 'legacy'}})
-    assert 'json' in calls[1] and 'data' not in calls[1]

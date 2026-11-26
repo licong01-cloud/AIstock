@@ -14,6 +14,7 @@ from .notification_details import DetailDeliveryError, fingerprint, workbook_tab
 
 BASE = 'https://open.feishu.cn/open-apis'
 RESOURCE = re.compile(r'^[a-zA-Z0-9_-]+$')
+APP_MESSAGE_BUDGET = 30_000  # Conservative bytes for the documented 30 KB card request limit.
 
 
 class SheetAPIError(DetailDeliveryError):
@@ -44,25 +45,35 @@ class FeishuSheetsClient:
         self.app_id, self._secret, self.chat_id = app_id, app_secret, chat_id
         self.request = request or requests.request
         self._token = None
+        self._token_expires_at = None
         self.before_request = None
 
     @property
     def destination_hash(self):
         return hashlib.sha256((self.app_id + '\n' + self.chat_id).encode()).hexdigest()
 
-    def call(self, method, path, *, body=None, params=None, auth=True):
-        if auth and not self._token:
+    def call(self, method, path, *, body=None, params=None, auth=True, body_bytes=None):
+        if auth and (not self._token or (self._token_expires_at is not None
+                                        and monotonic() >= self._token_expires_at)):
             data = self.call('POST', '/auth/v3/tenant_access_token/internal', auth=False,
                              body={'app_id': self.app_id, 'app_secret': self._secret})
             self._token = data.get('tenant_access_token')
             if not isinstance(self._token, str) or not self._token:
                 raise SheetAPIError('FEISHU_AUTH_TOKEN_MISSING')
+            expires_in = data.get('expire')
+            # Missing/invalid expiry permits this call only, never indefinite reuse.
+            lifetime = max(0, expires_in - 60) if type(expires_in) is int and expires_in > 0 else 0
+            self._token_expires_at = monotonic() + lifetime
         if self.before_request:
             self.before_request()
         try:
-            response = self.request(method, BASE + path, json=body, params=params,
-                                    headers={'Authorization': 'Bearer ' + self._token} if auth else {},
-                                    timeout=10, allow_redirects=False)
+            headers = {'Authorization': 'Bearer ' + self._token} if auth else {}
+            wire = {'json': body}
+            if body_bytes is not None:
+                headers['Content-Type'] = 'application/json; charset=utf-8'
+                wire = {'data': body_bytes}
+            response = self.request(method, BASE + path, **wire, params=params,
+                                    headers=headers, timeout=10, allow_redirects=False)
             data = response.json()
         except Exception:
             raise SheetAPIError('FEISHU_API_OUTCOME_UNKNOWN') from None
@@ -74,6 +85,41 @@ class FeishuSheetsClient:
         # Structured business rejection means the operation did not succeed.
         rejected = code != 0 and response.status_code < 500
         raise SheetAPIError('FEISHU_API_REJECTED_' + str(code), rejected=rejected)
+
+    def prepare_card_message(self, card, event_key):
+        """Pure preflight; no credentials or remote calls enter the prepared body."""
+        from .notification_presentation import card_json_bytes
+        if not isinstance(event_key, str) or not re.fullmatch(r'[a-f0-9]{64}', event_key):
+            raise DetailDeliveryError('FEISHU_MESSAGE_IDENTITY_INVALID')
+        message = dict(receive_id=self.chat_id, msg_type='interactive',
+                       content=card_json_bytes(card).decode('utf-8'),
+                       uuid=hashlib.sha256((self.destination_hash + '\n' + event_key).encode()).hexdigest()[:32])
+        self._card_message_bytes(message)
+        return message
+
+    def _card_message_bytes(self, message):
+        from .notification_presentation import card_json_bytes
+        if (not isinstance(message, dict) or message.get('receive_id') != self.chat_id
+                or message.get('msg_type') != 'interactive'
+                or not isinstance(message.get('content'), str)
+                or not isinstance(message.get('uuid'), str)
+                or not re.fullmatch(r'[a-f0-9]{32}', message['uuid'])):
+            raise DetailDeliveryError('FEISHU_MESSAGE_IDENTITY_INVALID')
+        encoded = card_json_bytes(message)
+        if len(encoded) > APP_MESSAGE_BUDGET:
+            raise DetailDeliveryError('FEISHU_APP_MESSAGE_TOO_LARGE')
+        return encoded
+
+    def send_card_message(self, message):
+        """App-bot delivery reuses sheet auth/HTTP and requires a native receipt."""
+        encoded = self._card_message_bytes(message)
+        data = self.call('POST', '/im/v1/messages', params={'receive_id_type': 'chat_id'}, body_bytes=encoded)
+        message_id = data.get('message_id') if isinstance(data, dict) else None
+        if (not isinstance(message_id, str) or not re.fullmatch(r'om_[a-zA-Z0-9_-]+', message_id)
+                or data.get('chat_id') != self.chat_id or data.get('msg_type') != 'interactive'):
+            # Missing/mismatched acceptance is ambiguous and must never be resent.
+            raise DetailDeliveryError('FEISHU_MESSAGE_RECEIPT_INVALID')
+        return dict(message_id=message_id, message_uuid=message['uuid'], message_transport='feishu_app')
 
     def create(self, title):
         data = self.call('POST', '/sheets/v3/spreadsheets', body={'title': title})['spreadsheet']
@@ -237,9 +283,26 @@ class DetailSheetDelivery:
         # Prepare and validate locally before recording an uncertain remote send.
         save(message_started=True, message_payload_sha256=message_sha)
         # Exceptions preserve message_started; never blindly repeat an uncertain send.
-        accepted = send(payload['subject'], message) is True
+        try:
+            outcome = send(payload['subject'], message)
+        except SheetAPIError as exc:
+            if exc.rejected:
+                save(message_started=False)
+            raise
+        receipt = {}
+        if isinstance(outcome, dict):
+            if (set(outcome) != {'message_id', 'message_uuid', 'message_transport'}
+                    or outcome.get('message_transport') != 'feishu_app'
+                    or not isinstance(outcome.get('message_id'), str)
+                    or not re.fullmatch(r'om_[a-zA-Z0-9_-]+', outcome['message_id'])
+                    or not isinstance(message, dict)
+                    or outcome.get('message_uuid') != message.get('uuid')):
+                raise DetailDeliveryError('FEISHU_MESSAGE_RECEIPT_INVALID')
+            receipt, accepted = outcome, True
+        else:
+            accepted = outcome is True
         if not accepted:
             save(message_started=False)
             raise DetailDeliveryError('FEISHU_DETAIL_MESSAGE_REJECTED')
-        save(message_accepted=True)
+        save(message_accepted=True, **receipt)
         return True

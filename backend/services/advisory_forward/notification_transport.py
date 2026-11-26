@@ -31,31 +31,45 @@ class AdvisoryNotificationTransport(NotificationService):
             details = os.getenv('AISTOCK_ADVISORY_FEISHU_DETAILS_ENABLED', '').strip().lower() in {
                 '1', 'true', 'yes', 'on'
             }
+            app_ready = all(os.getenv(k, '').strip() for k in (
+                'AISTOCK_ADVISORY_FEISHU_APP_ID', 'AISTOCK_ADVISORY_FEISHU_APP_SECRET',
+                'AISTOCK_ADVISORY_FEISHU_CHAT_ID',
+            ))
+            if details:
+                error = None if app_ready else 'FEISHU_DETAILS_CONFIGURATION_MISSING'
+            else:
+                error = None if valid else 'FEISHU_WEBHOOK_URL_INVALID' if url else 'FEISHU_WEBHOOK_URL_MISSING'
             self.config.update(
                 advisory_feishu_completion_only=True,
                 advisory_feishu_details=details,
-                advisory_feishu_configuration_error=(
-                    None if valid else 'FEISHU_WEBHOOK_URL_INVALID' if url
-                    else 'FEISHU_WEBHOOK_URL_MISSING'
-                ),
+                advisory_feishu_app_messages=details and app_ready,
+                advisory_feishu_configuration_error=error,
                 webhook_enabled=True,
                 webhook_type='feishu',
                 webhook_url=url if valid else '',
                 webhook_signing_secret=os.getenv('AISTOCK_ADVISORY_FEISHU_SIGNING_SECRET', ''),
             )
-            if details and not all(os.getenv(k, '').strip() for k in (
-                'AISTOCK_ADVISORY_FEISHU_APP_ID', 'AISTOCK_ADVISORY_FEISHU_APP_SECRET',
-                'AISTOCK_ADVISORY_FEISHU_CHAT_ID',
-            )):
-                self.config.update(webhook_url='',
-                                   advisory_feishu_configuration_error='FEISHU_DETAILS_CONFIGURATION_MISSING')
+            if details and not app_ready:
+                self.config['webhook_url'] = ''
+
+    def _detail_client(self):
+        from .feishu_sheets import FeishuSheetsClient
+        if not hasattr(self, '_feishu_client'):
+            self._feishu_client = FeishuSheetsClient(*(
+                os.getenv('AISTOCK_ADVISORY_FEISHU_' + k, '').strip()
+                for k in ('APP_ID', 'APP_SECRET', 'CHAT_ID')
+            ))
+        return self._feishu_client
 
     def detail_delivery(self):
-        from .feishu_sheets import DetailSheetDelivery, FeishuSheetsClient
-        return DetailSheetDelivery(FeishuSheetsClient(*(
-            os.getenv('AISTOCK_ADVISORY_FEISHU_' + k, '').strip()
-            for k in ('APP_ID', 'APP_SECRET', 'CHAT_ID')
-        )))
+        from .feishu_sheets import DetailSheetDelivery
+        return DetailSheetDelivery(self._detail_client())
+
+    def prepare_detail_card(self, card, event_key):
+        from .notification_details import DetailDeliveryError
+        if not self.config.get('advisory_feishu_app_messages'):
+            raise DetailDeliveryError('FEISHU_DETAILS_CONFIGURATION_MISSING')
+        return self._detail_client().prepare_card_message(card, event_key)
 
     def send_external_message(self, channel: str, subject: str, message: str) -> bool:
         """Explicit external acceptance; never use the legacy UI fallback."""
@@ -110,21 +124,12 @@ class AdvisoryNotificationTransport(NotificationService):
             raise ExternalNotificationDeliveryError('FEISHU_MESSAGE_TOO_LARGE')
         return data
 
-    def send_detail_card(self, card):
-        """Dedicated Advisory card; shared monitor/portfolio methods stay inherited."""
+    def send_detail_card(self, message):
+        """Prepared Advisory app message; shared notification methods stay inherited."""
         if not (self.config.get('advisory_feishu_details') and self.config.get('advisory_feishu_completion_only')
-                and self.config.get('webhook_enabled') and self.config.get('webhook_type') == 'feishu'
-                and self.config.get('webhook_url')):
+                and self.config.get('advisory_feishu_app_messages')):
             return False
-        data = self._prepare_feishu_request({'msg_type': 'interactive', 'card': card})
-        try:
-            response = self._post_webhook(data)
-            code = response.json().get('code') if response.status_code == 200 else None
-            if type(code) is not int:
-                raise ExternalNotificationDeliveryError('FEISHU_MESSAGE_OUTCOME_UNKNOWN')
-            return code == 0
-        except Exception:
-            raise ExternalNotificationDeliveryError('WEBHOOK_TRANSPORT_ERROR') from None
+        return self._detail_client().send_card_message(message)
 
     def _post_webhook(self, data: Dict):
         """Bounded strict HTTP transport; legacy transports remain inherited."""

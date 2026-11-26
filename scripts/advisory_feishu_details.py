@@ -26,8 +26,7 @@ def main():
     args = parser.parse_args()
     from dotenv import load_dotenv
     load_dotenv(args.env_file, override=False)
-    from backend.services.advisory_forward.feishu_sheets import DetailSheetDelivery, FeishuSheetsClient
-    from backend.services.advisory_forward.notification_details import DetailSnapshotBuilder
+    from backend.services.advisory_forward.notification_details import DetailSnapshotBuilder, fingerprint
     from backend.services.advisory_forward.notification_presentation import mobile_card
     from backend.services.advisory_forward.notification_repository import AdvisoryNotificationRepository
     from backend.services.advisory_forward.notification_transport import AdvisoryNotificationTransport
@@ -56,10 +55,10 @@ def main():
             state = payload.get('sheet_delivery_state') or {}
             if not (payload['subject'].startswith('【测试】') and state.get('document_token') and state.get('message_accepted')):
                 parser.error('Mobile preview requires an already accepted labeled test document.')
-            from backend.services.advisory_forward.notification_details import fingerprint
             receipt['prior_test_delivery_state_sha256'] = fingerprint(state)
             receipt['mobile_preview_prepared'] = True
-            for key in ('message_started', 'message_accepted', 'message_payload_sha256'):
+            for key in ('message_started', 'message_accepted', 'message_payload_sha256',
+                        'message_id', 'message_uuid', 'message_transport'):
                 state.pop(key, None)
             payload['subject'] = f"【测试】AIstock 手机全量表格｜{payload['detail_snapshot']['target_date']}"
             persist(receipt)
@@ -104,17 +103,18 @@ def main():
         payload['sheet_delivery_state'] = state
         persist(receipt)
 
-    client = FeishuSheetsClient(*(os.getenv('AISTOCK_ADVISORY_FEISHU_' + key, '').strip()
-                                  for key in ('APP_ID', 'APP_SECRET', 'CHAT_ID')))
     transport = AdvisoryNotificationTransport()
     # Test uses strict detail semantics without changing the environment/global sender.
     if not transport.config.get('advisory_feishu_completion_only'):
         parser.error('Dedicated Advisory Feishu sender must be configured.')
-    transport.config = dict(transport.config, advisory_feishu_details=True)
+    if not transport.config.get('advisory_feishu_app_messages'):
+        parser.error('Dedicated Advisory app-message sender must be configured.')
+    event_key = fingerprint(['advisory_feishu_explicit_test', payload['detail_snapshot']['sha256'], payload['subject']])
     try:
-        DetailSheetDelivery(client).deliver(payload, checkpoint, lambda subject, message:
+        transport.detail_delivery().deliver(payload, checkpoint, lambda subject, message:
             transport.send_detail_card(message),
-            update_test_table=args.refresh_test_table, prepare_message=mobile_card)
+            update_test_table=args.refresh_test_table,
+            prepare_message=lambda value, url: transport.prepare_detail_card(mobile_card(value, url), event_key))
     except Exception as exc:
         import traceback
         from backend.services.advisory_forward.notification_details import DetailDeliveryError
