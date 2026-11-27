@@ -14,7 +14,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2289",
-  "closed_at": null,
+  "closed_at": "2026-11-27T03:06:39.765573Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -23,13 +23,14 @@
   "code_intelligence_scoped_miss": "Graph entry points resolve to unrelated legacy Qlib Group symbols; UA graph is stale. Follow exact named Advisory functions and their direct callers/tests.",
   "created_at": "2026-11-26T04:50:10.675752Z",
   "delivery_scope_notes": {
-    "cleanup": "NOT_EXECUTED",
+    "cleanup": "SOURCE_CLEANED; close-sync worktree cleanup follows metadata merge",
+    "cleanup_receipt_ref": "tmp/issue_workflow/BUG-2289/source-cleanup-post-restart.json",
     "ddl": "noop",
     "dependencies": "noop",
     "dynamic_callback_pagination": "Separate future enhancement; not required or represented as delivered in this transport fix.",
     "external_test_send": "NOT_EXECUTED",
     "production_database_writes": 0,
-    "runtime_activation": "PENDING_USER_RESTART"
+    "runtime_activation": "VERIFIED_USER_RESTART_20261127"
   },
   "description": "Detail sheets use app credentials but automatic group cards use custom webhook; valid full list blocked before network by an extra 18KB guard.",
   "events": [
@@ -47,9 +48,16 @@
   "external_readonly_validation": {
     "auth_code": 0,
     "auth_http": 200,
-    "conclusion": "App credentials authenticate. Current recipient rendering and actual send acceptance remain unverified.",
-    "configured_chat_get": "CONNECTION_ERROR",
-    "external_messages": 0
+    "conclusion": "Post-restart runtime identity and scheduler smoke passed. Application message preflight and existing spreadsheet/group readback passed. New application send acceptance and recipient rendering await the next natural event.",
+    "historical_configured_chat_get": "CONNECTION_ERROR",
+    "external_messages": 0,
+    "post_restart_complete_request_bytes": 22288,
+    "post_restart_mobile_rows": 202,
+    "post_restart_sheet_count": 8,
+    "post_restart_group_view_permission": true,
+    "post_restart_message_readback": "PASS; existing notice not found in 33 visible messages",
+    "new_application_send_acceptance": "PENDING_NEXT_NATURAL_EVENT",
+    "post_restart_readonly_receipt": "tmp/issue_workflow/BUG-2289/post-restart-feishu-readonly-20261127T030445Z.json"
   },
   "file_scope_contract": {
     "actual_changed_files": [
@@ -197,8 +205,8 @@
   },
   "first_seen_at": "2026-11-26T04:50:10.675752Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "b8d5337e5aec7f6ed32b8b6a1e2d8c555d575501",
+  "fixed_at": "2026-11-26T05:13:49Z",
   "fresh_process_receipt_sha256": "11a7c7aca3ba90686a76ba3a39c4fc8ac66351fc32ff89a2724de6532c0c8007",
   "github_issue_number": 7483,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7483",
@@ -207,7 +215,7 @@
       "evidence": "native scheduler test plus 216-row production frozen-payload preflight",
       "implementation": "notification_transport.py; notifications.py; feishu_sheets.py",
       "requirement": "Existing app-bot transport, one daily full-table message and same spreadsheet",
-      "result": "SOURCE_PASS_RUNTIME_PENDING"
+      "result": "SOURCE_AND_RUNTIME_PASS_EXTERNAL_ACCEPTANCE_PENDING"
     },
     {
       "evidence": "exact 30000-byte boundary and three-byte overflow tests; real payload 23642 bytes",
@@ -233,6 +241,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/7484",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -297,9 +306,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:/Dev/AIstock/tmp/issue_workflow/BUG-2289/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2289",
+      "business_smoke_semantic": {
+        "contract_id": "scheduler_status",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "e49ea55d85a17e74db97ae002f4da0d40fbf7b0441f6386d5a270dbc76470bf6",
+      "contract_digest": "7b1423491f0f2eea1820be95f724c6e1534b176b7ef4a2e67c186b77309ddb44",
+      "expected_identity": "b8d5337e5aec7f6ed32b8b6a1e2d8c555d575501",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-11-27T03:01:59.303274Z",
+      "mode": "read_only",
+      "observed_identity": "bb0cb722e3c8e7d2b4e48a6b2e8edc47a6e53e54",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "11936bdaa4d8faaf6bc1625048ef9b390354350091dc468f347a68b603648061",
+      "receipt_sha256": "457222750b5536d23af427437ccd0dac6b48486eecb6534f52344717381b9e15",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "83d7f3c55d12dbee9344cd951f276d030be04488465cf7d0240900a9b2434c5b",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -310,7 +342,29 @@
   "schema_version": "aistock_validation_bug_v1",
   "scope_expansion_reason": "The existing explicitly invoked test-send CLI calls the same card sender and must preserve the new prepared-message preflight and app receipt contract. No test send is executed by this repair.",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2289",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "d1891b99ba71aa54",
+    "recorded_at": "2026-11-26T05:14:42.280188Z",
+    "runtime_contract_digest": "7b1423491f0f2eea1820be95f724c6e1534b176b7ef4a2e67c186b77309ddb44",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "6c9361980e3feb828788f7499fc5e0c970e14ae7",
+    "source_merge_commit": "b8d5337e5aec7f6ed32b8b6a1e2d8c555d575501",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/7484",
+    "validation_evidence": [
+      "python -m nox -s l0 -> passed",
+      "rtk pytest -q backend/tests/advisory_model_first/test_advisory_notifications.py backend/tests/advisory_model_first/test_advisory_feishu_sheets.py backend/tests/advisory_model_first/test_advisory_notification_presentation.py backend/tests/advisory_model_first/test_advisory_feishu_app_messages.py -> 130 passed"
+    ],
+    "validation_evidence_digest": "fd5f34e3359bc9755019a1bc69eadba31bc101d19c34b75caaa25231119b6414"
+  },
+  "status": "verified",
   "suspected_modules": [
     "advisory"
   ],
@@ -324,7 +378,10 @@
     "Existing DEV native receipt checkpoint/readback and daily dedupe -> 1 passed, full rollback and independent zero-row check",
     "Affected configuration and compact-wire tests -> passed",
     "python -m nox -s l0 -> passed",
-    "changed-file Ruff and git diff --check -> passed"
+    "changed-file Ruff and git diff --check -> passed",
+    "rtk pytest -q backend/tests/advisory_model_first/test_advisory_notifications.py backend/tests/advisory_model_first/test_advisory_feishu_sheets.py backend/tests/advisory_model_first/test_advisory_notification_presentation.py backend/tests/advisory_model_first/test_advisory_feishu_app_messages.py -> 130 passed",
+    "Post-restart backend-main identity and health/scheduler smoke PASS; observed bb0cb722e contains source merge b8d5337e5; no process control",
+    "Read-only current frozen 202-row mobile payload: complete app request 22288/30000 bytes; 8 spreadsheet tabs readable; group view permission verified; zero messages and zero production writes; native app send receipt PENDING_NEXT_NATURAL_EVENT; receipt tmp/issue_workflow/BUG-2289/post-restart-feishu-readonly-20261127T030445Z.json"
   ],
   "verification_budget": {
     "budget": "standard",
