@@ -23,13 +23,14 @@
   "code_intelligence_scoped_miss": "Graph entry points resolve to unrelated legacy Qlib Group symbols; UA graph is stale. Follow exact named Advisory functions and their direct callers/tests.",
   "created_at": "2026-11-26T04:50:10.675752Z",
   "delivery_scope_notes": {
-    "cleanup": "NOT_EXECUTED",
+    "cleanup": "SOURCE_CLEANED; close-sync worktree cleanup follows metadata merge",
+    "cleanup_receipt_ref": "tmp/issue_workflow/BUG-2289/source-cleanup-post-restart.json",
     "ddl": "noop",
     "dependencies": "noop",
     "dynamic_callback_pagination": "Separate future enhancement; not required or represented as delivered in this transport fix.",
     "external_test_send": "NOT_EXECUTED",
     "production_database_writes": 0,
-    "runtime_activation": "PENDING_USER_RESTART"
+    "runtime_activation": "VERIFIED_USER_RESTART_20261127"
   },
   "description": "Detail sheets use app credentials but automatic group cards use custom webhook; valid full list blocked before network by an extra 18KB guard.",
   "events": [
@@ -47,9 +48,16 @@
   "external_readonly_validation": {
     "auth_code": 0,
     "auth_http": 200,
-    "conclusion": "App credentials authenticate. Current recipient rendering and actual send acceptance remain unverified.",
-    "configured_chat_get": "CONNECTION_ERROR",
-    "external_messages": 0
+    "conclusion": "Post-restart runtime identity and scheduler smoke passed. Application message preflight and existing spreadsheet/group readback passed. New application send acceptance and recipient rendering await the next natural event.",
+    "historical_configured_chat_get": "CONNECTION_ERROR",
+    "external_messages": 0,
+    "post_restart_complete_request_bytes": 22288,
+    "post_restart_mobile_rows": 202,
+    "post_restart_sheet_count": 8,
+    "post_restart_group_view_permission": true,
+    "post_restart_message_readback": "PASS; existing notice not found in 33 visible messages",
+    "new_application_send_acceptance": "PENDING_NEXT_NATURAL_EVENT",
+    "post_restart_readonly_receipt": "tmp/issue_workflow/BUG-2289/post-restart-feishu-readonly-20261127T030445Z.json"
   },
   "file_scope_contract": {
     "actual_changed_files": [
@@ -207,7 +215,7 @@
       "evidence": "native scheduler test plus 216-row production frozen-payload preflight",
       "implementation": "notification_transport.py; notifications.py; feishu_sheets.py",
       "requirement": "Existing app-bot transport, one daily full-table message and same spreadsheet",
-      "result": "SOURCE_PASS_RUNTIME_PENDING"
+      "result": "SOURCE_AND_RUNTIME_PASS_EXTERNAL_ACCEPTANCE_PENDING"
     },
     {
       "evidence": "exact 30000-byte boundary and three-byte overflow tests; real payload 23642 bytes",
